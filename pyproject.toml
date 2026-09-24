@@ -1,0 +1,8 @@
+[tool.uv.workspace]
+members = ["backend", "service"]
+
+# PyTorch CUDA index — เปลี่ยน cu121 ตาม CUDA version ที่ได้จาก nvidia-smi
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true

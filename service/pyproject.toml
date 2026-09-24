@@ -1,0 +1,18 @@
+[project]
+name = "service"
+version = "0.1.0"
+description = "ARQ background worker for AI Ecosystem"
+requires-python = ">=3.12"
+dependencies = [
+    "arq>=0.28.0",
+    "transformers>=4.40.0",
+    "datasets>=2.19.0,<3.0",
+    "minio>=7.2.0",
+    "seqeval>=1.2.2",
+    "accelerate>=0.29.0",
+    "torch>=2.3.0",
+]
+
+# บอก uv ให้ดึง torch จาก CUDA index แทน PyPI default (CPU-only)
+[tool.uv.sources]
+torch = { index = "pytorch-cu132" }

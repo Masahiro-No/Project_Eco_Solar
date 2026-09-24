@@ -1,0 +1,20 @@
+﻿Method,Path,Summary,Description,Tags,Auth Required
+POST,/api/auth/login,Login,,auth,No
+POST,/api/auth/register,Register,,auth,No
+GET,/api/auth/me,Get Me,,auth,Yes
+GET,/api/users,Get All Users,,users,Yes
+GET,/api/users/{user_id},Get User,,users,Yes
+PATCH,/api/users/{user_id},Update User,,users,Yes
+DELETE,/api/users/{user_id},Delete User,,users,Yes
+GET,/api/storage/buckets,List Buckets,,storage,Yes
+POST,/api/storage/buckets,Create Bucket,,storage,Yes
+POST,/api/storage/upload,Upload File,,storage,Yes
+GET,/api/storage/download/{bucket_name}/{object_name},Download File,,storage,Yes
+PUT,/api/storage/buckets/{bucket_name}/versioning,Set Versioning,,storage,Yes
+GET,/api/label-studio/projects,List Projects,,label-studio,Yes
+POST,/api/label-studio/projects,Create Project,,label-studio,Yes
+GET,/api/label-studio/projects/{project_id}/tasks,List Tasks,,label-studio,Yes
+POST,/api/label-studio/projects/{project_id}/tasks,Create Task,,label-studio,Yes
+POST,/api/jobs/,Enqueue Job,,jobs,Yes
+GET,/api/jobs/{job_id},Get Job Status,,jobs,Yes
+GET,/health,Health Check,ตรวจสอบว่า API server ทำงานปกติ,system,No

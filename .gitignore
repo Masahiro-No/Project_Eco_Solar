@@ -1,0 +1,6 @@
+minio_data/
+logs/
+assignment/
+
+
+**/__pycache__/
