@@ -14,13 +14,16 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from api.auth.router import router as auth_router
+from api.dashboard.router import router as dashboard_router
 from api.inference.router import router as inference_router
+from api.ingestion.router import router as ingestion_router
 from api.jobs.router import router as jobs_router
 from api.label_studio.router import router as label_studio_router
+from api.stations.router import router as stations_router
 from api.storage.router import router as storage_router
 from api.users.router import router as users_router
 from core.config import settings
-from db.database import create_database_schema
+from db.database import create_database_schema, seed_default_stations
 
 # ── OpenTelemetry Setup ───────────────────────────────────────────────────────
 _otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
@@ -54,10 +57,13 @@ LoggingInstrumentor().instrument(set_logging_format=True)
 tags_metadata = [
     {"name": "auth", "description": "Authentication — register, login, JWT token"},
     {"name": "users", "description": "User CRUD operations"},
+    {"name": "stations", "description": "Solar Stations — station specs, panel area, efficiency, soft-delete & restore"},
+    {"name": "dashboard", "description": "Dashboard & Analytics — system KPI summary, station detail, alert feeds"},
     {"name": "storage", "description": "MinIO object storage — buckets, upload, download"},
     {"name": "label-studio", "description": "Label Studio — projects & tasks"},
-    {"name": "jobs", "description": "Job queue — enqueue work to Redis / ARQ worker"},
-    {"name": "inference", "description": "NER Inference — ส่ง text ให้โมเดล predict entities"},
+    {"name": "jobs", "description": "Redis Task Queue Management — queues overview, cancel, retry, clear"},
+    {"name": "inference", "description": "Solar Forecast Inference & Decision Support"},
+    {"name": "ingestion", "description": "Weather & Satellite Ingestion Data Pipeline"},
     {"name": "system", "description": "Health check & system info"},
 ]
 
@@ -66,13 +72,18 @@ tags_metadata = [
 async def lifespan(_: FastAPI):
     # Convenient for a new project; replace with Alembic migrations in production.
     await create_database_schema()
+    try:
+        await seed_default_stations()
+    except Exception as e:
+        # Fallback if DB not yet connected during local dev tools
+        print(f"[Seed Warning] Could not seed default station: {e}")
     yield
 
 
 app = FastAPI(
-    title="AI Ecosystem API",
-    description="Central API Server for AI Ecosystem — จัดการ users, storage, annotation, และ job queue",
-    version="0.1.0",
+    title="Solar Forecast DSS API",
+    description="Central API Server for Solar Power Forecasting & Decision Support System",
+    version="0.2.0",
     debug=settings.DEBUG_MODE,
     lifespan=lifespan,
     docs_url="/",
@@ -82,10 +93,13 @@ app = FastAPI(
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
+app.include_router(stations_router, prefix="/api")
+app.include_router(dashboard_router, prefix="/api")
 app.include_router(storage_router, prefix="/api")
 app.include_router(label_studio_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(inference_router, prefix="/api")
+app.include_router(ingestion_router, prefix="/api")
 
 # ── Instrument FastAPI — สร้าง Span & Metrics อัตโนมัติทุก HTTP Request ─────
 FastAPIInstrumentor.instrument_app(
