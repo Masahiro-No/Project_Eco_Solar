@@ -85,12 +85,88 @@ def setup_logger(job_id: str) -> logging.Logger:
     return logger
 
 
+def _load_trained_solar_onnx():
+    """Load ONNX model and scalers directly from MinIO 'models/solar_lstm/'."""
+    try:
+        import io
+        import joblib
+        import onnxruntime as ort
+        from minio import Minio
+
+        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
+        minio_client = Minio(
+            minio_endpoint,
+            access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
+            secret_key=os.environ.get("MINIO_SECRET_KEY", "password"),
+            secure=False,
+        )
+
+        # 1. Fetch ONNX model bytes from MinIO
+        onnx_resp = minio_client.get_object("models", "solar_lstm/solar_ghi_lstm.onnx")
+        onnx_bytes = onnx_resp.read()
+        onnx_resp.close()
+        onnx_resp.release_conn()
+
+        session = ort.InferenceSession(onnx_bytes)
+
+        # 2. Fetch Scalers from MinIO
+        fs_resp = minio_client.get_object("models", "solar_lstm/feature_scaler.joblib")
+        feature_scaler = joblib.load(io.BytesIO(fs_resp.read()))
+        fs_resp.close()
+        fs_resp.release_conn()
+
+        ts_resp = minio_client.get_object("models", "solar_lstm/target_scaler.joblib")
+        target_scaler = joblib.load(io.BytesIO(ts_resp.read()))
+        ts_resp.close()
+        ts_resp.release_conn()
+
+        return session, feature_scaler, target_scaler
+    except Exception as e:
+        print(f"[ONNX MinIO Warning] Could not load ONNX model from MinIO: {e}")
+        return None, None, None
+
+
+def _run_onnx_inference(session, feat_scaler, tgt_scaler, input_features: Optional[Any] = None) -> list[float]:
+    """Execute ONNX inference on a 144-step sequence and return 18 unscaled GHI predictions."""
+    import numpy as np
+
+    seq_144 = None
+    if input_features is not None:
+        try:
+            arr = np.array(input_features, dtype=np.float32)
+            if arr.shape == (144, 16):
+                seq_144 = arr
+        except Exception:
+            seq_144 = None
+
+    if seq_144 is None:
+        # Baseline nominal sequence (144 steps, 16 features) for realistic daytime inference
+        seq_144 = np.zeros((144, 16), dtype=np.float32)
+        seq_144[:, 0] = 550.0   # GHI
+        seq_144[:, 1] = 620.0   # DNI
+        seq_144[:, 2] = 160.0   # DHI
+        seq_144[:, 3] = 700.0   # Clearsky GHI
+        seq_144[:, 4] = 40.0    # Zenith
+        seq_144[:, 5] = 0.85    # clearsky_ratio
+        seq_144[:, 6] = 31.0    # Temp
+        seq_144[:, 7] = 68.0    # Humidity
+        seq_144[:, 8] = 1011.0  # Pressure
+        seq_144[:, 9] = 2.8     # Wind Speed
+
+    scaled_seq = feat_scaler.transform(seq_144).astype(np.float32)
+    scaled_batch = np.expand_dims(scaled_seq, axis=0)  # (1, 144, 16)
+    ort_inputs = {session.get_inputs()[0].name: scaled_batch}
+    raw_pred = session.run(None, ort_inputs)[0]        # (1, 18)
+    unscaled = tgt_scaler.inverse_transform(raw_pred.reshape(-1, 1)).flatten()
+    return [round(float(max(0.0, val)), 2) for val in unscaled]
+
+
 def simulate_realistic_ghi_curve(current_dt: datetime) -> list[float]:
-    """Generate 6 points of GHI (every 30 mins for 3 hours) based on sun elevation."""
+    """Generate 18 points of GHI (every 10 mins for 3 hours) based on sun elevation."""
     base_hour = current_dt.hour + (current_dt.minute / 60.0)
     curve = []
-    for i in range(6):
-        step_hour = base_hour + (i * 0.5)
+    for i in range(18):
+        step_hour = base_hour + (i * (10.0 / 60.0))
         # Sunlight window roughly 6:00 to 18:30 in Thailand
         if 6.0 <= step_hour <= 18.5:
             fraction = (step_hour - 6.0) / (18.5 - 6.0)
@@ -100,6 +176,7 @@ def simulate_realistic_ghi_curve(current_dt: datetime) -> list[float]:
             ghi_val = 0.0
         curve.append(round(ghi_val, 2))
     return curve
+
 
 
 def _evaluate_rule_based_advisory(
@@ -187,7 +264,15 @@ async def run_inference(
 
         # ── 1. Simulate or Load Model Forecast ─────────────────────────
         now = datetime.now(timezone.utc)
-        ghi_curve = simulate_realistic_ghi_curve(now)
+        onnx_session, feat_scaler, tgt_scaler = _load_trained_solar_onnx()
+        if onnx_session is not None and feat_scaler is not None and tgt_scaler is not None:
+            logger.info("[Model] Successfully loaded ONNX SolarLSTMForecaster from MinIO (solar_ghi_lstm.onnx)")
+            ghi_curve = _run_onnx_inference(onnx_session, feat_scaler, tgt_scaler, kwargs.get("weather_features"))
+            logger.info(f"[Model] Produced 18-step GHI forecast via ONNX Runtime: min={min(ghi_curve):.1f}, max={max(ghi_curve):.1f} W/m2")
+        else:
+            logger.info("[Model] Using simulated astronomical elevation baseline (18 steps)")
+            ghi_curve = simulate_realistic_ghi_curve(now)
+
         avg_forecast_ghi = sum(ghi_curve) / len(ghi_curve) if ghi_curve else 500.0
 
         cloud_options = ["Clear", "Inward", "Outward", "Overcast"]

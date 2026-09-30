@@ -1,6 +1,12 @@
 minio_data/
 logs/
 assignment/
+data/
+artifacts/
+mlruns/
+mlflow.db
+*.pt
+*.onnx
+*.onnx.data
 
-
-**/__pycache__/
+**/__pycache__/

@@ -20,6 +20,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.51",
     "uvicorn[standard]>=0.32.0",
+    "pandas>=2.2.0",
     "opentelemetry-sdk>=1.25.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "opentelemetry-instrumentation-fastapi>=0.46b0",
