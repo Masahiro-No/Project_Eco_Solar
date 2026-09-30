@@ -85,15 +85,42 @@ def setup_logger(job_id: str) -> logging.Logger:
     return logger
 
 
-def _load_trained_solar_onnx():
-    """Load ONNX model and scalers directly from MinIO 'models/solar_lstm/'."""
+def _get_local_model_dir() -> Path:
+    """Find local project model/time-series directory across container and host environments."""
+    env_dir = os.environ.get("SOLAR_MODEL_DIR")
+    if env_dir and Path(env_dir).exists():
+        return Path(env_dir)
+
+    # 1. Project root / model / time-series (relative to this file: service/workers/inference_worker.py)
+    root_candidate = Path(__file__).resolve().parent.parent.parent / "model" / "time-series"
+    if root_candidate.exists():
+        return root_candidate
+
+    # 2. Container standard path /workspace/model/time-series
+    container_candidate = Path("/workspace/model/time-series")
+    if container_candidate.exists():
+        return container_candidate
+
+    # 3. Current working directory
+    cwd_candidate = Path.cwd() / "model" / "time-series"
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    # Default to container candidate if in container, else root candidate
+    return container_candidate if Path("/workspace").exists() else root_candidate
+
+
+def _sync_best_model_from_minio(target_dir: Path) -> bool:
+    """
+    Attempt to check MinIO 'models/solar_lstm/' for the best/latest model.
+    If MinIO has a newer model or local model is missing, pull artifacts to target_dir.
+    Returns True if local model was updated or verified, False if MinIO was unreachable.
+    """
     try:
-        import io
-        import joblib
-        import onnxruntime as ort
+        import json
         from minio import Minio
 
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
+        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
         minio_client = Minio(
             minio_endpoint,
             access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
@@ -101,28 +128,78 @@ def _load_trained_solar_onnx():
             secure=False,
         )
 
-        # 1. Fetch ONNX model bytes from MinIO
-        onnx_resp = minio_client.get_object("models", "solar_lstm/solar_ghi_lstm.onnx")
-        onnx_bytes = onnx_resp.read()
-        onnx_resp.close()
-        onnx_resp.release_conn()
+        # Check if MinIO has the model metadata
+        minio_meta_resp = minio_client.get_object("models", "solar_lstm/model_meta.json")
+        remote_meta = json.loads(minio_meta_resp.read().decode("utf-8"))
+        minio_meta_resp.close()
+        minio_meta_resp.release_conn()
 
-        session = ort.InferenceSession(onnx_bytes)
+        local_meta_path = target_dir / "model_meta.json"
+        needs_pull = False
 
-        # 2. Fetch Scalers from MinIO
-        fs_resp = minio_client.get_object("models", "solar_lstm/feature_scaler.joblib")
-        feature_scaler = joblib.load(io.BytesIO(fs_resp.read()))
-        fs_resp.close()
-        fs_resp.release_conn()
+        required_files = ["solar_ghi_lstm.onnx", "feature_scaler.joblib", "target_scaler.joblib", "model_meta.json"]
+        for f in required_files:
+            if not (target_dir / f).exists():
+                needs_pull = True
+                break
 
-        ts_resp = minio_client.get_object("models", "solar_lstm/target_scaler.joblib")
-        target_scaler = joblib.load(io.BytesIO(ts_resp.read()))
-        ts_resp.close()
-        ts_resp.release_conn()
+        if not needs_pull and local_meta_path.exists():
+            try:
+                with open(local_meta_path, "r", encoding="utf-8") as f:
+                    local_meta = json.load(f)
+                if remote_meta.get("trained_at", "") > local_meta.get("trained_at", ""):
+                    needs_pull = True
+            except Exception:
+                needs_pull = True
 
+        if needs_pull:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for f in required_files:
+                minio_client.fget_object("models", f"solar_lstm/{f}", str(target_dir / f))
+            print(f"[Model Sync] Pulled updated model (v{remote_meta.get('version', '1.0.0')}) from MinIO into '{target_dir}'")
+        else:
+            print(f"[Model Sync] Local project model in '{target_dir}' is already up-to-date")
+
+        return True
+    except Exception as e:
+        print(f"[Model Sync Notice] MinIO not reachable or skipped ({e}). Loading local project model directly.")
+        return False
+
+
+def _load_trained_solar_onnx():
+    """
+    Hybrid model loader:
+    1. Check MinIO: if accessible and has a newer version, sync to project 'model/time-series/'.
+    2. Load model & scalers directly from project 'model/time-series/'.
+       Allows teammates to run inference completely offline without MinIO!
+    3. Return (session, feature_scaler, target_scaler).
+    """
+    try:
+        import joblib
+        import onnxruntime as ort
+
+        model_dir = _get_local_model_dir()
+
+        # Step 1: Check and sync with MinIO if reachable
+        _sync_best_model_from_minio(model_dir)
+
+        # Step 2: Load directly from project directory
+        onnx_file = model_dir / "solar_ghi_lstm.onnx"
+        fs_file = model_dir / "feature_scaler.joblib"
+        ts_file = model_dir / "target_scaler.joblib"
+
+        if not (onnx_file.exists() and fs_file.exists() and ts_file.exists()):
+            print(f"[Model Warning] Model files not found in '{model_dir}'")
+            return None, None, None
+
+        session = ort.InferenceSession(str(onnx_file))
+        feature_scaler = joblib.load(str(fs_file))
+        target_scaler = joblib.load(str(ts_file))
+
+        print(f"[Model Loader] Successfully loaded Solar GHI LSTM from project '{model_dir}'")
         return session, feature_scaler, target_scaler
     except Exception as e:
-        print(f"[ONNX MinIO Warning] Could not load ONNX model from MinIO: {e}")
+        print(f"[Model Loader Error] Failed to load local project model: {e}")
         return None, None, None
 
 
@@ -266,7 +343,7 @@ async def run_inference(
         now = datetime.now(timezone.utc)
         onnx_session, feat_scaler, tgt_scaler = _load_trained_solar_onnx()
         if onnx_session is not None and feat_scaler is not None and tgt_scaler is not None:
-            logger.info("[Model] Successfully loaded ONNX SolarLSTMForecaster from MinIO (solar_ghi_lstm.onnx)")
+            logger.info("[Model] Successfully loaded ONNX SolarLSTMForecaster from project 'model/time-series/' (solar_ghi_lstm.onnx)")
             ghi_curve = _run_onnx_inference(onnx_session, feat_scaler, tgt_scaler, kwargs.get("weather_features"))
             logger.info(f"[Model] Produced 18-step GHI forecast via ONNX Runtime: min={min(ghi_curve):.1f}, max={max(ghi_curve):.1f} W/m2")
         else:

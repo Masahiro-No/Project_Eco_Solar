@@ -167,6 +167,8 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/workspace/logs
+      - ./model:/workspace/model
+      - ./service:/workspace/service
     deploy:
       resources:
         reservations:
@@ -244,6 +246,8 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/workspace/logs
+      - ./model:/workspace/model
+      - ./service:/workspace/service
     logging:
       driver: "json-file"
       options:

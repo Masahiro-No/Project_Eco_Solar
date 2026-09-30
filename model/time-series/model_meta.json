@@ -1,0 +1,48 @@
+{
+  "model_name": "solar_ghi_lstm",
+  "format": "ONNX",
+  "file_name": "solar_ghi_lstm.onnx",
+  "size_bytes": 869813,
+  "version": "1.0.0",
+  "trained_at": "2026-09-30 08:10:52 UTC",
+  "input_features": [
+    "GHI",
+    "DNI",
+    "DHI",
+    "Clearsky GHI",
+    "Solar Zenith Angle",
+    "clearsky_ratio",
+    "Temperature",
+    "Relative Humidity",
+    "Pressure",
+    "Wind Speed",
+    "hour_sin",
+    "hour_cos",
+    "day_sin",
+    "day_cos",
+    "month_sin",
+    "month_cos"
+  ],
+  "lookback_steps": 144,
+  "forecast_steps": 18,
+  "resolution_minutes": 10,
+  "test_metrics": {
+    "mae": 39.495,
+    "rmse": 84.338,
+    "r2": 0.9241,
+    "nrmse_pct": 18.44
+  },
+  "step_metrics": {
+    "test_rmse_plus_10min": 53.6,
+    "test_mae_plus_10min": 23.45,
+    "test_rmse_plus_30min": 70.38,
+    "test_mae_plus_30min": 32.12,
+    "test_rmse_plus_60min": 80.43,
+    "test_mae_plus_60min": 37.47,
+    "test_rmse_plus_120min": 90.26,
+    "test_mae_plus_120min": 43.0,
+    "test_rmse_plus_180min": 96.2,
+    "test_mae_plus_180min": 47.12
+  },
+  "device_trained": "cuda"
+}
