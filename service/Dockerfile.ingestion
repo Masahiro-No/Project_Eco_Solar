@@ -1,0 +1,27 @@
+# ---------- Ingestion Worker (Lightweight & Standalone) ----------
+FROM python:3.12-slim
+
+WORKDIR /workspace
+
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=5
+
+RUN pip install --no-cache-dir --default-timeout=120 --retries=5 \
+    "arq>=0.28.0,<0.29" \
+    "asyncpg>=0.30.0" \
+    "sqlalchemy[asyncio]>=2.0.0" \
+    "greenlet>=3.0.0" \
+    "fastapi>=0.115.0" \
+    "minio>=7.2.0" \
+    "pandas>=2.2.0" \
+    "pydantic>=2.0.0" \
+    "pydantic-settings>=2.0.0" \
+    "opentelemetry-sdk>=1.25.0" \
+    "opentelemetry-exporter-otlp-proto-grpc>=1.25.0"
+
+COPY backend /workspace/backend/
+COPY service /workspace/service/
+
+ENV PYTHONPATH="/workspace:/workspace/backend:/workspace/service"
+
+CMD ["python", "-m", "arq", "service.main.IngestionWorkerSettings"]
