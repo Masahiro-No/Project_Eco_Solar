@@ -392,8 +392,23 @@ def train_solar_model():
             minio_client.fput_object("models", "solar_lstm/model_meta.json", str(meta_path))
             print("  [MinIO] Uploaded self-contained 'solar_ghi_lstm.onnx' and scalers to bucket 'models/solar_lstm/'")
 
+            # Save directly to local project 'model/time-series/' for teammate git sharing and offline inference
+            try:
+                import shutil
+                project_model_dir = Path(__file__).resolve().parent.parent.parent / "model" / "time-series"
+                if not project_model_dir.parent.exists():
+                    project_model_dir = Path("/workspace/model/time-series")
+                project_model_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(onnx_path, project_model_dir / "solar_ghi_lstm.onnx")
+                shutil.copy2(temp_dir / "feature_scaler.joblib", project_model_dir / "feature_scaler.joblib")
+                shutil.copy2(temp_dir / "target_scaler.joblib", project_model_dir / "target_scaler.joblib")
+                shutil.copy2(meta_path, project_model_dir / "model_meta.json")
+                print(f"  [Project] Saved latest best model & scalers to '{project_model_dir}' for teammate/local usage")
+            except Exception as e:
+                print(f"  [Project Warning] Could not copy to project model dir: {e}")
+
     print("\n" + "=" * 70)
-    print(">> PIPELINE COMPLETE! Local repository is 100% clean.")
+    print(">> PIPELINE COMPLETE! Model artifacts saved to MinIO, MLflow, and project 'model/time-series/'")
     print("=" * 70)
 
 

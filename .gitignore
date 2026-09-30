@@ -9,4 +9,7 @@ mlflow.db
 *.onnx
 *.onnx.data
 
+# Whitelist model directory so teammates can use project models without MinIO
+!model/**
+
 **/__pycache__/
