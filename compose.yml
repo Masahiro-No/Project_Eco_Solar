@@ -132,6 +132,9 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
+      - ./backend/api:/app/api
+      - ./backend/core:/app/core
+      - ./backend/db:/app/db
     logging:
       driver: "json-file"
       options:
@@ -248,6 +251,7 @@ services:
       - ./logs:/workspace/logs
       - ./model:/workspace/model
       - ./service:/workspace/service
+      - ./Non_time_series:/workspace/Non_time_series
     logging:
       driver: "json-file"
       options:

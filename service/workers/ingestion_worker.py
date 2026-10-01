@@ -101,22 +101,27 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
     }
 
     with tracer.start_as_current_span("ingestion.scheduled_pipeline", attributes={"job.id": job_id}) as span:
-        # 1. Fetch latest NICT Himawari satellite frame ONCE per round
-        img_bytes, dt_frame, filename = None, None, None
+        # 1. Determine latest Himawari observation timestamp from NICT Japan
+        dt_frame = None
         try:
-            img_bytes, dt_frame, filename = IngestionService.fetch_nict_realtime_image()
-            if img_bytes and dt_frame:
-                results["satellite_frame"] = {
-                    "filename": filename,
-                    "timestamp": dt_frame.isoformat(),
-                    "size_bytes": len(img_bytes),
-                }
-                logger.info(f"Fetched latest NICT satellite frame: {filename} ({len(img_bytes):,} bytes)")
-                span.set_attribute("satellite.filename", filename)
-                span.set_attribute("satellite.frame_time", dt_frame.isoformat())
+            import json
+            import urllib.request
+            from api.ingestion.service import NICT_LATEST_JSON
+            req = urllib.request.Request(NICT_LATEST_JSON, headers={"User-Agent": "SolarForecastDSS/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                latest_info = json.loads(resp.read().decode())
+            date_str = latest_info.get("date")
+            dt_frame = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            results["satellite_frame"] = {
+                "observation_time": dt_frame.isoformat(),
+            }
+            logger.info(f"Latest Himawari satellite observation timestamp: {dt_frame.isoformat()}")
+            span.set_attribute("satellite.frame_time", dt_frame.isoformat())
         except Exception as e:
-            logger.warning(f"Could not fetch NICT satellite image: {e}")
+            logger.warning(f"Could not check NICT observation time: {e}")
             span.record_exception(e)
+            now = datetime.now(timezone.utc)
+            dt_frame = now.replace(minute=(now.minute // 10) * 10, second=0, microsecond=0)
 
         storage = StorageService()
         try:
@@ -140,28 +145,40 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
                     "sat_backfilled": 0,
                 }
 
-                # A. Save satellite frame metadata & upload to station folder
-                if img_bytes and dt_frame and filename:
+                # A. Save localized satellite frame metadata & upload to station folder
+                st_img_bytes, st_dt_frame, st_filename = IngestionService.fetch_station_b03_crop(
+                    dt_frame or datetime.now(timezone.utc), st.latitude, st.longitude
+                )
+
+                if st_img_bytes and st_dt_frame and st_filename:
                     try:
-                        object_name = f"{st.id}/{filename}"
+                        object_name = f"{st.id}/{st_filename}"
                         storage.upload_file(
                             bucket_name=SATELLITE_BUCKET,
                             object_name=object_name,
-                            data=io.BytesIO(img_bytes),
-                            length=len(img_bytes),
+                            data=io.BytesIO(st_img_bytes),
+                            length=len(st_img_bytes),
+                            content_type="image/png",
+                        )
+                        # Also upload latest cropped preview for dashboard
+                        storage.upload_file(
+                            bucket_name=SATELLITE_BUCKET,
+                            object_name=f"{st.id}_latest.png",
+                            data=io.BytesIO(st_img_bytes),
+                            length=len(st_img_bytes),
                             content_type="image/png",
                         )
 
                         # Idempotent DB insert: check if (station_id, frame_timestamp) already exists
                         exist_stmt = select(SatelliteFrameMetadata).where(
                             SatelliteFrameMetadata.station_id == st.id,
-                            SatelliteFrameMetadata.frame_timestamp == dt_frame,
+                            SatelliteFrameMetadata.frame_timestamp == st_dt_frame,
                         )
                         existing_frame = (await db.execute(exist_stmt)).scalar_one_or_none()
                         if not existing_frame:
                             frame_record = SatelliteFrameMetadata(
                                 station_id=st.id,
-                                frame_timestamp=dt_frame,
+                                frame_timestamp=st_dt_frame,
                                 image_url=f"/api/storage/download/{SATELLITE_BUCKET}/{object_name}",
                             )
                             db.add(frame_record)

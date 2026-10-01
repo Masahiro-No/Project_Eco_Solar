@@ -16,6 +16,8 @@ RUN pip install --no-cache-dir --default-timeout=120 --retries=5 \
     "pandas>=2.2.0" \
     "pydantic>=2.0.0" \
     "pydantic-settings>=2.0.0" \
+    "pillow>=10.0.0" \
+    "numpy>=1.24.0" \
     "opentelemetry-sdk>=1.25.0" \
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0"
 
