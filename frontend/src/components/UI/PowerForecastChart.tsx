@@ -6,9 +6,12 @@ import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Respon
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { powerData } from '@/data/dashboard';
+import { useForecast } from '@/context/ForecastContext';
 
 export function PowerForecastChart() {
   const t = useTranslations('common');
+  const { chartPowerData } = useForecast();
+  const data = chartPowerData || powerData;
 
   return (
     <Panel
@@ -32,7 +35,7 @@ export function PowerForecastChart() {
       </div>
       <div className="min-h-0 flex-1">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={powerData} margin={{ top: 6, right: 6, left: -16, bottom: -4 }}>
+          <ComposedChart data={data} margin={{ top: 6, right: 6, left: -16, bottom: -4 }}>
             <CartesianGrid stroke="#eef2f7" />
             <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} />
             <YAxis

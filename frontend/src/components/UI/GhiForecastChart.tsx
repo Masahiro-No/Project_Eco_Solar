@@ -6,9 +6,12 @@ import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Respon
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { ghiData } from '@/data/dashboard';
+import { useForecast } from '@/context/ForecastContext';
 
 export function GhiForecastChart() {
   const t = useTranslations('common');
+  const { chartGhiData, isLive } = useForecast();
+  const data = chartGhiData || ghiData;
 
   return (
     <Panel
@@ -17,6 +20,12 @@ export function GhiForecastChart() {
       className="h-full"
       action={
         <div className="flex items-center gap-3 text-[12px] text-slate-600">
+          {isLive && (
+            <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-600 border border-emerald-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              ONNX Model
+            </span>
+          )}
           <span className="flex items-center gap-1.5 whitespace-nowrap">
             <span className="h-0.5 w-4 bg-brand" /> {t('actual')}
           </span>
@@ -29,7 +38,7 @@ export function GhiForecastChart() {
       <p className="shrink-0 text-[11px] font-semibold text-slate-600">{t('ghi_unit')}</p>
       <div className="min-h-0 flex-1">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={ghiData} margin={{ top: 6, right: 6, left: -20, bottom: -4 }}>
+          <ComposedChart data={data} margin={{ top: 6, right: 6, left: -20, bottom: -4 }}>
             <CartesianGrid stroke="#eef2f7" />
             <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} interval={1} />
             <YAxis domain={[0, 1000]} ticks={[0, 200, 400, 600, 800, 1000]} tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false} />

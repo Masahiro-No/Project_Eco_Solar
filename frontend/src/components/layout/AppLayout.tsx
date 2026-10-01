@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/UI/Sidebar';
 import { stationOptions } from '@/data/dashboard';
 import { LanguageProvider } from '@/context/LanguageContext';
 import { AuthProvider } from '@/context/AuthContext';
+import { ForecastProvider } from '@/context/ForecastContext';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -18,24 +19,26 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <LanguageProvider>
       <AuthProvider>
-        {isLoginPage ? (
-          <div className="min-h-screen w-full bg-canvas">{children}</div>
-        ) : (
-          <div className="flex h-screen w-full flex-col overflow-hidden bg-canvas">
-            <TopBar
-              station={station}
-              onStationChange={setStation}
-              target={target}
-              onTargetChange={setTarget}
-            />
-            <div className="flex min-h-0 flex-1">
-              <Sidebar />
-              <main className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
-                {children}
-              </main>
+        <ForecastProvider currentStation={station}>
+          {isLoginPage ? (
+            <div className="min-h-screen w-full bg-canvas">{children}</div>
+          ) : (
+            <div className="flex h-screen w-full flex-col overflow-hidden bg-canvas">
+              <TopBar
+                station={station}
+                onStationChange={setStation}
+                target={target}
+                onTargetChange={setTarget}
+              />
+              <div className="flex min-h-0 flex-1">
+                <Sidebar />
+                <main className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
+                  {children}
+                </main>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </ForecastProvider>
       </AuthProvider>
     </LanguageProvider>
   );
