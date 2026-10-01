@@ -42,3 +42,20 @@ class IngestionStatusResponse(BaseModel):
     nict_status: str = "ok"
     total_weather_records: int = 0
     total_satellite_frames: int = 0
+
+
+class CatchupRequest(BaseModel):
+    station_id: Optional[str] = Field("ST-001", description="Station ID to catch up (default: ST-001)")
+    max_gap_days: Optional[int] = Field(7, ge=1, le=30, description="Maximum days of gap to backfill")
+
+
+class CatchupResponse(BaseModel):
+    status: str
+    message: str
+    station_id: str
+    gap_hours: Optional[float] = 0.0
+    records_inserted: int = 0
+    latest_timestamp: Optional[str] = None
+    from_timestamp: Optional[str] = None
+    to_timestamp: Optional[str] = None
+

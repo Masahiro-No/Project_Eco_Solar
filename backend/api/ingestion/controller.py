@@ -49,3 +49,20 @@ async def get_ingestion_status(
 ) -> IngestionStatusResponse:
     """ตรวจสอบสถานะสุขภาพและการเชื่อมต่อ Data Source (Open-Meteo, NICT Himawari) และจำนวนข้อมูลในระบบ"""
     return await IngestionService.get_status(db=db)
+
+
+async def trigger_auto_catchup(
+    payload: IngestTriggerRequest,
+    db: AsyncSession = Depends(get_db_session),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """สั่งตรวจสอบ Gap ของข้อมูลและดึงข้อมูลย้อนหลังทั้ง Weather Time-Series และภาพถ่ายดาวเทียม 12 เฟรมอัตโนมัติ"""
+    station_id = payload.station_id or "ST-001"
+    w_res = await IngestionService.auto_catchup_weather(db=db, station_id=station_id)
+    s_res = await IngestionService.auto_catchup_satellite(db=db, station_id=station_id, count=12)
+    return {
+        "station_id": station_id,
+        "weather": w_res,
+        "satellite": s_res,
+    }
+

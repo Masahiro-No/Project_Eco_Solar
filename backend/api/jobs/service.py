@@ -58,7 +58,7 @@ class JobService:
     async def get_all_queues_summary() -> list[dict]:
         """List summary of queues and key metrics from Redis."""
         pool = await JobService.get_pool()
-        known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:infer_queue"]
+        known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue"]
         summaries = []
 
         for q in known_queues:
@@ -100,7 +100,7 @@ class JobService:
         status = await job.status()
         
         # Abort and remove from queues
-        known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:infer_queue"]
+        known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue"]
         for q in known_queues:
             await pool.zrem(q, job_id)
         

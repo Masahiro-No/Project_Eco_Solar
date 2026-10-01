@@ -4,6 +4,7 @@ from api.ingestion.controller import (
     get_ingestion_status,
     get_recent_satellite_frames,
     get_recent_weather,
+    trigger_auto_catchup,
     trigger_ingestion,
 )
 from api.ingestion.schema import (
@@ -23,6 +24,16 @@ router.add_api_route(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Trigger Real-time Weather & Satellite Ingestion",
 )
+
+router.add_api_route(
+    "/catchup",
+    trigger_auto_catchup,
+    methods=["POST"],
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Trigger Auto Catch-up / Gap Backfill for Station",
+)
+
 
 router.add_api_route(
     "/weather/{station_id}/recent",

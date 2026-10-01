@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # -------------------------
   # Redis
@@ -169,6 +167,8 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/workspace/logs
+      - ./model:/workspace/model
+      - ./service:/workspace/service
     deploy:
       resources:
         reservations:
@@ -229,6 +229,9 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "admin"
+      MINIO_SECRET_KEY: "password"
       MLFLOW_TRACKING_URI: "http://mlflow:5000"
       MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
       AWS_ACCESS_KEY_ID: "admin"
@@ -243,6 +246,46 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/workspace/logs
+      - ./model:/workspace/model
+      - ./service:/workspace/service
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # -------------------------
+  # Ingestion Worker (Weather & Satellite Data Fetcher)
+  # -------------------------
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: service/Dockerfile.ingestion
+    container_name: ingestion-worker
+    restart: unless-stopped
+    environment:
+      database_url: "postgresql+asyncpg://myuser:mypassword@postgres/mydatabase"
+      minio_endpoint: "minio:9000"
+      minio_access_key: "admin"
+      minio_secret_key: "password"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      redis_host: "redis"
+      redis_port: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      OTEL_SERVICE_NAME: "ingestion-worker"
+      OTEL_RESOURCE_ATTRIBUTES: "service.version=0.2.0"
+      LOG_DIR: "/workspace/logs"
+      PYTHONPATH: "/workspace:/workspace/backend:/workspace/service"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/workspace/logs
+      - ./backend:/workspace/backend
+      - ./service:/workspace/service
     logging:
       driver: "json-file"
       options:

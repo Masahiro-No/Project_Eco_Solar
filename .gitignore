@@ -1,6 +1,15 @@
 minio_data/
 logs/
 assignment/
+data/
+artifacts/
+mlruns/
+mlflow.db
+*.pt
+*.onnx
+*.onnx.data
 
+# Whitelist model directory so teammates can use project models without MinIO
+!model/**
 
-**/__pycache__/
+**/__pycache__/
