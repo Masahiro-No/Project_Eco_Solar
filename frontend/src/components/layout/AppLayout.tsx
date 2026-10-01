@@ -12,7 +12,7 @@ import { ForecastProvider } from '@/context/ForecastContext';
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [station, setStation] = useState(stationOptions[0]);
-  const [target, setTarget] = useState('850');
+  const [target, setTarget] = useState('5000');
 
   const isLoginPage = pathname === '/login';
 

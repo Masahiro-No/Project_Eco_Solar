@@ -1,21 +1,63 @@
 /**
  * SolarDSS API Client Service
  * Connects frontend with FastAPI Backend & AI Model Inference Engine.
+ * Strictly aligned with Backend Pydantic Schemas in api/stations/schema.py
  * Falls back seamlessly to mock data when backend is not running.
  */
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export interface StationDto {
-  id: string;
+// ==========================================
+// Station API Schemas (api/stations/schema.py)
+// ==========================================
+
+export interface StationBase {
   name: string;
   latitude: number;
   longitude: number;
-  panel_area: number;
-  efficiency: number;
-  target_capacity_kw: number;
-  is_active: boolean;
+  panel_area: number; // Area in m^2
+  efficiency: number; // 0.0 to 1.0 (e.g. 0.185)
+  target_capacity_kw: number; // Target capacity in kW
 }
+
+export interface StationCreateRequest extends StationBase {
+  id?: string; // Optional custom ID (e.g. "ST-001")
+}
+
+export interface StationUpdateRequest extends StationBase {}
+
+export interface StationPatchRequest {
+  name?: string;
+  latitude?: number;
+  longitude?: number;
+  panel_area?: number;
+  efficiency?: number;
+  target_capacity_kw?: number;
+}
+
+export interface StationResponse extends StationBase {
+  id: string;
+  is_active: boolean;
+  deleted_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Backward-compatibility alias
+export type StationDto = StationResponse;
+
+export interface NearestStationResponse {
+  station_id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  target_capacity_kw: number;
+  distance_km: number;
+}
+
+// ==========================================
+// Inference API Schemas
+// ==========================================
 
 export interface PredictionResultData {
   job_id: string;
@@ -43,6 +85,10 @@ export interface InferenceEnqueueResponse {
   enqueued_at: string;
 }
 
+// ==========================================
+// API Client Service
+// ==========================================
+
 export const solarApi = {
   /**
    * Check if backend API server is online and responding
@@ -56,12 +102,19 @@ export const solarApi = {
     }
   },
 
+  // ----------------------------------------
+  // Stations API (api/stations/router.py)
+  // ----------------------------------------
+
   /**
-   * Fetch all active solar stations from DB
+   * GET /api/stations - Fetch all active solar stations from DB
    */
-  async getStations(): Promise<StationDto[]> {
+  async getStations(limit: number = 50, offset: number = 0): Promise<StationResponse[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations`, { method: 'GET', cache: 'no-store' });
+      const res = await fetch(`${API_BASE_URL}/api/stations?limit=${limit}&offset=${offset}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
       if (res.ok) {
         return await res.json();
       }
@@ -70,6 +123,155 @@ export const solarApi = {
     }
     return [];
   },
+
+  /**
+   * GET /api/stations/archived - Fetch all soft-deleted stations
+   */
+  async getArchivedStations(): Promise<StationResponse[]> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/archived`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.info('[solarApi.getArchivedStations] Backend offline or error:', err);
+    }
+    return [];
+  },
+
+  /**
+   * GET /api/stations/{station_id} - Fetch single station by ID
+   */
+  async getStationById(stationId: string): Promise<StationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.info(`[solarApi.getStationById] Error fetching ${stationId}:`, err);
+    }
+    return null;
+  },
+
+  /**
+   * POST /api/stations - Create a new solar station
+   */
+  async createStation(payload: StationCreateRequest): Promise<StationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error('[solarApi.createStation] Error creating station:', err);
+    }
+    return null;
+  },
+
+  /**
+   * PUT /api/stations/{station_id} - Full update station spec
+   */
+  async updateStation(stationId: string, payload: StationUpdateRequest): Promise<StationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`[solarApi.updateStation] Error updating ${stationId}:`, err);
+    }
+    return null;
+  },
+
+  /**
+   * PATCH /api/stations/{station_id} - Partial update station
+   */
+  async patchStation(stationId: string, payload: StationPatchRequest): Promise<StationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`[solarApi.patchStation] Error patching ${stationId}:`, err);
+    }
+    return null;
+  },
+
+  /**
+   * DELETE /api/stations/{station_id} - Soft-delete station
+   */
+  async deleteStation(stationId: string): Promise<StationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`[solarApi.deleteStation] Error deleting ${stationId}:`, err);
+    }
+    return null;
+  },
+
+  /**
+   * PATCH /api/stations/{station_id}/restore - Restore soft-deleted station
+   */
+  async restoreStation(stationId: string): Promise<StationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}/restore`, {
+        method: 'PATCH',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`[solarApi.restoreStation] Error restoring ${stationId}:`, err);
+    }
+    return null;
+  },
+
+  /**
+   * GET /api/stations/nearest - Find nearest station by coordinates
+   */
+  async findNearestStation(lat: number, lon: number): Promise<NearestStationResponse | null> {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/stations/nearest?lat=${lat}&lon=${lon}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error('[solarApi.findNearestStation] Error:', err);
+    }
+    return null;
+  },
+
+  // ----------------------------------------
+  // Inference API (api/inference/router.py)
+  // ----------------------------------------
 
   /**
    * Fetch the latest model forecast result for a given station
@@ -94,7 +296,7 @@ export const solarApi = {
    */
   async triggerPrediction(
     stationId: string = 'ST-001',
-    targetKw: number = 850,
+    targetKw: number = 5000,
     modelVersion: string = 'v1.0.0'
   ): Promise<InferenceEnqueueResponse | null> {
     try {

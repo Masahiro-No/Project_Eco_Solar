@@ -24,7 +24,7 @@ export function StationTable() {
       <table className="w-full table-fixed text-[12.5px]">
         <thead>
           <tr className="bg-canvas text-left text-slate-700">
-            <th className="w-8 rounded-l-md px-2.5 py-2 font-bold">{t('th_id')}</th>
+            <th className="w-[64px] rounded-l-md px-2.5 py-2 font-bold">{t('th_id')}</th>
             <th className="px-2.5 py-2 font-bold">{t('th_station_name')}</th>
             <th className="w-[58px] px-2.5 py-2 text-right font-bold">{t('th_pgen')}</th>
             <th className="w-[66px] px-2.5 py-2 text-right font-bold">{t('th_ptarget')}</th>

@@ -88,8 +88,10 @@ export interface TimeSeriesPredictionOutput {
  */
 export function generateTimeSeriesPrediction(
   stationId: string = 'ST-001',
-  stationName: string = 'Hat Yai Solar Farm',
-  targetPowerKw: number = 850
+  stationName: string = 'PSU Hat Yai Solar Farm (ม.อ. หาดใหญ่)',
+  targetPowerKw: number = 5000,
+  panelAreaM2: number = 30000,
+  efficiency: number = 0.185
 ): TimeSeriesPredictionOutput {
   const now = new Date();
   const currentHour = now.getHours() + now.getMinutes() / 60;
@@ -130,9 +132,9 @@ export function generateTimeSeriesPrediction(
   }
 
   // Calculate Power Generation: P_gen = (Area * Efficiency * GHI) / 1000
-  // Standard solar farm: Area ~ 5,500 m2, Efficiency ~ 18.5%
+  // Backend ST-001: Area = 30,000 m2, Efficiency = 18.5%
   const currentGhi = curve[0] || 0;
-  const estimatedPowerKw = Math.round((5500 * 0.185 * currentGhi) / 1000);
+  const estimatedPowerKw = Math.round((panelAreaM2 * efficiency * currentGhi) / 1000);
   const deltaP = Math.max(0, targetPowerKw - estimatedPowerKw);
 
   return {

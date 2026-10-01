@@ -73,7 +73,7 @@ export default function ForecastPage() {
           <div>
             <p className="text-[13px] font-medium text-slate-600">{t('peak_ghi_predicted')}</p>
             <p className="text-[24px] font-bold text-ink">{peakGhi} <span className="text-[14px] font-normal text-muted">W/m²</span></p>
-            <p className="text-[11.5px] text-muted">{peakPoint ? `รอบเวลา ${peakPoint.t}` : t('peak_ghi_time')}</p>
+            <p className="text-[11.5px] text-muted">{peakPoint ? `${t('at_time')} ${peakPoint.t}` : t('peak_ghi_time')}</p>
           </div>
         </article>
 

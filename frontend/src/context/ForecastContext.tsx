@@ -71,7 +71,7 @@ export function ForecastProvider({
     } else {
       // 2. Pure Frontend Time-Series Model Engine (Direct from model_meta.json specs)
       setIsLive(false);
-      const localResult = generateTimeSeriesPrediction(stationId, currentStation, 850);
+      const localResult = generateTimeSeriesPrediction(stationId, currentStation, 5000, 30000, 0.185);
       setLocalPrediction(localResult);
     }
     setIsLoading(false);
@@ -136,7 +136,7 @@ export function ForecastProvider({
     const sampledPower: PowerChartPoint[] = [];
     for (let i = 0; i < curve.length; i += 2) {
       const ghi = curve[i];
-      const pgen = Math.round((5500 * 0.185 * ghi) / 1000);
+      const pgen = Math.round((30000 * 0.185 * ghi) / 1000);
       sampledPower.push({
         t: timestamps[i] || `+${(i + 1) * 10}m`,
         gen: pgen,
