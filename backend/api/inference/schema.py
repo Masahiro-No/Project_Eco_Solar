@@ -21,7 +21,9 @@ class PredictionResultData(BaseModel):
     station_name: str
     predicted_at: datetime
     forecast_horizon_hours: int = 3
-    ghi_forecast_curve: list[float] = Field(..., description="6 points of GHI (W/m^2) every 30 mins")
+    ghi_forecast_curve: list[float] = Field(..., description="18 points of final GHI (W/m^2) every 10 mins modulated with ConvLSTM cloud index")
+    ghi_forecast_lstm_raw: Optional[list[float]] = Field(None, description="18 points of raw GHI from Time-Series LSTM before cloud modulation")
+    cloud_indices: Optional[list[float]] = Field(None, description="18 points of Cloud Index (0.0 - 1.0) extracted from Center ROI by ConvLSTM")
     estimated_power_kw: float
     target_power_kw: float
     delta_p_kw: float
@@ -29,6 +31,7 @@ class PredictionResultData(BaseModel):
     confidence: float
     alert_level: str  # Normal, Early Warning, Critical Alert, Recovery
     recommendation_text: str
+    bess_advisory: Optional[str] = Field(None, description="Specific BESS battery storage advisory derived from cloud motion")
     satellite_image_url: Optional[str] = None
 
 

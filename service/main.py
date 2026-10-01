@@ -5,13 +5,13 @@ from arq.connections import RedisSettings
 
 from service.workers.inference_worker import run_inference
 from service.workers.simple_worker import simple_work
-from service.workers.train_worker import train_model
+from service.workers.train_worker import train_convlstm_nowcaster, train_model, train_timeseries_lstm
 
 
 class WorkerSettings:
     """Settings สำหรับ Trainer Worker (GPU Dedicated สำหรับเทรนโมเดลล้วนๆ)"""
     queue_name = "train_queue"
-    functions = [simple_work, train_model]
+    functions = [simple_work, train_model, train_timeseries_lstm, train_convlstm_nowcaster]
     redis_settings = RedisSettings(
         host=os.environ.get("REDIS_HOST", "localhost"),
         port=int(os.environ.get("REDIS_PORT", "6379")),

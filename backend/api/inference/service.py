@@ -168,7 +168,7 @@ class InferenceService:
         db.add(prediction)
         await db.commit()
 
-        # 6. Enqueue background task into Redis inference_queue with 144 weather features
+        # 6. Enqueue background task into Redis inference_queue with 144 weather features & station coords
         try:
             pool = await InferenceService.get_redis_pool()
             await pool.enqueue_job(
@@ -177,6 +177,10 @@ class InferenceService:
                 target_kw,
                 model_version,
                 weather_features=weather_features,
+                station_lat=station.latitude,
+                station_lon=station.longitude,
+                panel_area=station.panel_area,
+                efficiency=station.efficiency,
                 _job_id=job_id,
                 _queue_name="inference_queue",
             )
@@ -208,6 +212,7 @@ class InferenceService:
         pred, station_name = row
 
         # Synchronize ONNX worker result from Redis if available
+        worker_res = None
         try:
             pool = await InferenceService.get_redis_pool()
             job = Job(job_id, pool)
@@ -217,6 +222,8 @@ class InferenceService:
                 pred.ghi_forecast_curve = worker_res["ghi_forecast_curve"]
                 pred.estimated_power_kw = worker_res.get("estimated_power_kw", pred.estimated_power_kw)
                 pred.delta_p_kw = worker_res.get("delta_p_kw", pred.delta_p_kw)
+                pred.cloud_trend = worker_res.get("cloud_trend", pred.cloud_trend)
+                pred.confidence = worker_res.get("confidence", pred.confidence)
                 pred.alert_level = worker_res.get("alert_level", pred.alert_level)
                 pred.recommendation_text = worker_res.get("recommendation_text", pred.recommendation_text)
                 await db.commit()
@@ -231,6 +238,8 @@ class InferenceService:
             predicted_at=pred.predicted_at,
             forecast_horizon_hours=pred.forecast_horizon_hours,
             ghi_forecast_curve=pred.ghi_forecast_curve,
+            ghi_forecast_lstm_raw=worker_res.get("ghi_forecast_lstm_raw") if worker_res else None,
+            cloud_indices=worker_res.get("cloud_indices") if worker_res else None,
             estimated_power_kw=pred.estimated_power_kw,
             target_power_kw=pred.target_power_kw,
             delta_p_kw=pred.delta_p_kw,
@@ -238,6 +247,7 @@ class InferenceService:
             confidence=pred.confidence,
             alert_level=pred.alert_level,
             recommendation_text=pred.recommendation_text,
+            bess_advisory=worker_res.get("bess_advisory") if worker_res else None,
             satellite_image_url=pred.satellite_frame_url,
         )
 

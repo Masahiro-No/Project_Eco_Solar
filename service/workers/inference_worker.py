@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as np
+
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -118,14 +120,20 @@ def _sync_best_model_from_minio(target_dir: Path) -> bool:
     """
     try:
         import json
+        import urllib3
         from minio import Minio
 
         minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+        http_client = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=1.5, read=3.0),
+            retries=urllib3.Retry(total=1, connect=1, read=1),
+        )
         minio_client = Minio(
             minio_endpoint,
             access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
             secret_key=os.environ.get("MINIO_SECRET_KEY", "password"),
             secure=False,
+            http_client=http_client,
         )
 
         # Check if MinIO has the model metadata
@@ -201,6 +209,151 @@ def _load_trained_solar_onnx():
     except Exception as e:
         print(f"[Model Loader Error] Failed to load local project model: {e}")
         return None, None, None
+
+
+def _get_convlstm_model_dir() -> Path:
+    """Locate ConvLSTM model directory across container, host, or fallback paths."""
+    env_dir = os.environ.get("CONVLSTM_MODEL_DIR")
+    if env_dir and Path(env_dir).exists():
+        return Path(env_dir)
+
+    # 1. Project root / model / convlstm
+    root_candidate = Path(__file__).resolve().parent.parent.parent / "model" / "convlstm"
+    if root_candidate.exists():
+        return root_candidate
+
+    # 2. Container standard path /workspace/model/convlstm
+    container_candidate = Path("/workspace/model/convlstm")
+    if container_candidate.exists():
+        return container_candidate
+
+    # 3. Fallback to Non_time_series directory
+    non_ts_candidate = Path(__file__).resolve().parent.parent.parent / "Non_time_series"
+    if non_ts_candidate.exists():
+        return non_ts_candidate
+
+    container_non_ts = Path("/workspace/Non_time_series")
+    if container_non_ts.exists():
+        return container_non_ts
+
+    return container_candidate if Path("/workspace").exists() else root_candidate
+
+
+def _sync_convlstm_from_minio(target_dir: Path) -> bool:
+    """Sync ConvLSTM ONNX model from MinIO 'models/cloud_convlstm/' if reachable."""
+    try:
+        import urllib3
+        from minio import Minio
+        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+        http_client = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=1.5, read=3.0),
+            retries=urllib3.Retry(total=1, connect=1, read=1),
+        )
+        minio_client = Minio(
+            minio_endpoint,
+            access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
+            secret_key=os.environ.get("MINIO_SECRET_KEY", "password"),
+            secure=False,
+            http_client=http_client,
+        )
+
+        required = ["cloud_seq2seq_12to18.onnx", "cloud_seq2seq_metadata.json"]
+        needs_pull = any(not (target_dir / f).exists() for f in required)
+        if needs_pull:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for f in required:
+                minio_client.fget_object("models", f"cloud_convlstm/{f}", str(target_dir / f))
+            print(f"[ConvLSTM Sync] Pulled ConvLSTM model from MinIO into '{target_dir}'")
+        return True
+    except Exception:
+        return False
+
+
+def _load_trained_convlstm_onnx():
+    """Hybrid ConvLSTM model loader with project-first strategy and MinIO sync fallback."""
+    try:
+        import onnxruntime as ort
+
+        model_dir = _get_convlstm_model_dir()
+        _sync_convlstm_from_minio(model_dir)
+
+        onnx_file = model_dir / "cloud_seq2seq_12to18.onnx"
+        if not onnx_file.exists():
+            for fallback in [
+                Path("/workspace/Non_time_series/cloud_seq2seq_12to18.onnx"),
+                Path(__file__).resolve().parent.parent.parent / "Non_time_series" / "cloud_seq2seq_12to18.onnx",
+            ]:
+                if fallback.exists():
+                    onnx_file = fallback
+                    break
+
+        if not onnx_file.exists():
+            print(f"[ConvLSTM Warning] Model file not found in '{model_dir}'")
+            return None
+
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 2
+        session = ort.InferenceSession(str(onnx_file), opts, providers=["CPUExecutionProvider"])
+        print(f"[ConvLSTM Loader] Successfully loaded ConvLSTM from '{onnx_file}'")
+        return session
+    except Exception as e:
+        print(f"[ConvLSTM Loader Error] Failed to load ConvLSTM model: {e}")
+        return None
+
+
+def _run_convlstm_nowcasting(session, sat_sequence_12: Any, roi_size: int = 5) -> tuple[Any, list[float]]:
+    """Execute ConvLSTM inference on 12-frame satellite sequence and extract 18-step Cloud Index (CI).
+
+    Returns:
+        tuple of (frames_18: np.ndarray of shape (18, 64, 64), ci_array: list of 18 floats in [0.0, 1.0])
+    """
+    import numpy as np
+
+    input_name = session.get_inputs()[0].name
+    out = session.run(None, {input_name: sat_sequence_12})[0]
+    frames_18 = out[0, :, 0, :, :]
+
+    cy, cx = frames_18.shape[1] // 2, frames_18.shape[2] // 2
+    r = roi_size // 2
+    roi = frames_18[:, cy - r : cy + r + 1, cx - r : cx + r + 1]
+    ci_values = np.clip(np.mean(roi, axis=(1, 2)), 0.0, 1.0)
+    ci_list = [round(float(x), 3) for x in ci_values]
+    return frames_18, ci_list
+
+
+def _classify_cloud_motion_and_advisory(ci_array: list[float], frames_18: Any) -> tuple[str, float, str]:
+    """Classify cloud dynamics into Clear, Inward, Outward, Overcast and provide specific BESS advisory."""
+    import numpy as np
+
+    ci_mean = float(np.mean(ci_array))
+    ci_delta = float(ci_array[-1] - ci_array[0])
+    ci_first_half = float(np.mean(ci_array[:9]))
+    ci_second_half = float(np.mean(ci_array[9:]))
+
+    if ci_mean < 0.20:
+        trend = "Clear"
+        advisory = "คงการชาร์จแบตเตอรี่ปกติ ไม่จำเป็นต้องสำรองไฟฉุกเฉิน (Clear Sky, high irradiance steady)"
+    elif ci_mean > 0.70:
+        trend = "Overcast"
+        advisory = "เตรียมจ่ายไฟจาก BESS เสริมความเสถียร แดดตกต่ำต่อเนื่องยาวนาน 3 ชม. (Persistent overcast cloud layer)"
+    elif ci_delta > 0.15 or (ci_second_half - ci_first_half > 0.12):
+        trend = "Inward"
+        advisory = "แจ้งเตือนแดดดรอปเฉียบพลัน! สั่งเตรียมปล่อยกำลังไฟ BESS Ramp-up รองรับ (Dense cloud front moving in)"
+    elif ci_delta < -0.10 or (ci_first_half - ci_second_half > 0.10):
+        trend = "Outward"
+        advisory = "กลุ่มเมฆกำลังพ้นสถานี แดดจะฟื้นตัวกลับมา เตรียมลดการจ่ายไฟ BESS (Cloud cover clearing out)"
+    else:
+        if ci_mean < 0.40:
+            trend = "Clear"
+            advisory = "คงการชาร์จแบตเตอรี่ปกติ แดดส่องสม่ำเสมอเป็นส่วนใหญ่ (Scattered light clouds)"
+        else:
+            trend = "Overcast"
+            advisory = "เตรียมจ่ายไฟจาก BESS เสริมความเสถียร รองรับความผันผวนของเมฆ (Moderate cloud shading)"
+
+    variance = float(np.var(ci_array))
+    confidence = round(float(np.clip(0.95 - (variance * 0.4), 0.82, 0.97)), 2)
+
+    return trend, confidence, advisory
 
 
 def _run_onnx_inference(session, feat_scaler, tgt_scaler, input_features: Optional[Any] = None) -> list[float]:
@@ -339,26 +492,80 @@ async def run_inference(
         logger.info(f"[Job] Station ID: {actual_station_id}, Target: {target_power_kw} kW, Model Version: {model_version}")
         logger.info("=" * 60)
 
-        # ── 1. Simulate or Load Model Forecast ─────────────────────────
+        # ── 1. Simulate or Load Model Forecast (Time-Series LSTM) ───────
         now = datetime.now(timezone.utc)
         onnx_session, feat_scaler, tgt_scaler = _load_trained_solar_onnx()
         if onnx_session is not None and feat_scaler is not None and tgt_scaler is not None:
             logger.info("[Model] Successfully loaded ONNX SolarLSTMForecaster from project 'model/time-series/' (solar_ghi_lstm.onnx)")
-            ghi_curve = _run_onnx_inference(onnx_session, feat_scaler, tgt_scaler, kwargs.get("weather_features"))
-            logger.info(f"[Model] Produced 18-step GHI forecast via ONNX Runtime: min={min(ghi_curve):.1f}, max={max(ghi_curve):.1f} W/m2")
+            raw_ghi_curve = _run_onnx_inference(onnx_session, feat_scaler, tgt_scaler, kwargs.get("weather_features"))
+            logger.info(f"[Model LSTM] Produced 18-step Raw GHI forecast: min={min(raw_ghi_curve):.1f}, max={max(raw_ghi_curve):.1f} W/m2")
         else:
             logger.info("[Model] Using simulated astronomical elevation baseline (18 steps)")
-            ghi_curve = simulate_realistic_ghi_curve(now)
+            raw_ghi_curve = simulate_realistic_ghi_curve(now)
+
+        # ── 2. Run ConvLSTM Satellite Nowcasting & GHI Cloud Modulation ──
+        try:
+            from service.workers.satellite_preprocessor import get_satellite_sequence_12, STATION_COORDINATES
+            from service.workers.cloud_index_extractor import (
+                classify_bess_motion_state,
+                extract_center_roi_cloud_indices,
+                extract_optical_flow_dynamics,
+                modulate_lstm_ghi,
+            )
+
+            st_lat = kwargs.get("station_lat")
+            st_lon = kwargs.get("station_lon")
+            if st_lat is None or st_lon is None:
+                coords = STATION_COORDINATES.get(actual_station_id, (7.0086, 100.4988))
+                st_lat, st_lon = coords[0], coords[1]
+
+            target_dt_param = kwargs.get("target_dt")
+            sat_input = get_satellite_sequence_12(
+                station_id=actual_station_id,
+                lat=st_lat,
+                lon=st_lon,
+                target_dt_utc=target_dt_param,
+            )
+            conv_session = _load_trained_convlstm_onnx()
+
+            if conv_session is not None:
+                logger.info(f"[Model ConvLSTM] Running Seq2Seq ConvLSTM Nowcasting for '{actual_station_id}' ({st_lat}, {st_lon})...")
+                frames_18, ci_array = _run_convlstm_nowcasting(conv_session, sat_input)
+
+                # Cloud Tracking & Meteorological DSS
+                flow_stats = extract_optical_flow_dynamics(frames_18)
+                dss_meta = classify_bess_motion_state(ci_array, flow_stats)
+                cloud_trend = dss_meta["state"]
+                confidence = dss_meta["confidence"]
+                bess_advisory = f"{dss_meta['bess_action']} (Speed: {flow_stats['speed_kmh']} km/h, State: {dss_meta['state_th']})"
+
+                # Modulate GHI using formula: GHI_final(t) = GHI_lstm(t) * (1.0 - CI_t)
+                ghi_curve = [
+                    round(float(v), 1)
+                    for v in modulate_lstm_ghi(raw_ghi_curve, ci_array)
+                ]
+                logger.info(f"[Model ConvLSTM] Extracted 18-step Cloud Index (CI): min={min(ci_array):.3f}, max={max(ci_array):.3f}, mean={float(np.mean(ci_array)):.3f}")
+                logger.info(f"[Model Fusion] Modulated GHI curve: min={min(ghi_curve):.1f}, max={max(ghi_curve):.1f} W/m2")
+                logger.info(f"[Model Fusion] Meteorological State: {cloud_trend} ({dss_meta['state_th']}) | Wind/Cloud Speed: {flow_stats['speed_kmh']} km/h")
+            else:
+                logger.warning("[Model ConvLSTM] ConvLSTM not available. Falling back to unmodulated GHI curve.")
+                ci_array = [0.0] * 18
+                ghi_curve = raw_ghi_curve
+                cloud_trend = "Clear"
+                confidence = 0.85
+                bess_advisory = "คงการชาร์จแบตเตอรี่ปกติ ไม่จำเป็นต้องสำรองไฟฉุกเฉิน (Baseline mode)"
+        except Exception as e:
+            logger.warning(f"[Model ConvLSTM Error] Nowcasting error ({e}). Using unmodulated GHI.")
+            ci_array = [0.0] * 18
+            ghi_curve = raw_ghi_curve
+            cloud_trend = "Clear"
+            confidence = 0.85
+            bess_advisory = "คงการชาร์จแบตเตอรี่ปกติ (Fallback mode)"
 
         avg_forecast_ghi = sum(ghi_curve) / len(ghi_curve) if ghi_curve else 500.0
 
-        cloud_options = ["Clear", "Inward", "Outward", "Overcast"]
-        cloud_trend = random.choice(cloud_options)
-        confidence = round(random.uniform(0.82, 0.96), 2)
-
-        # Baseline PSU Hat Yai Station specs (30,000 m2, 18.5% efficiency)
-        panel_area = 30000.0
-        efficiency = 0.185
+        panel_area = float(kwargs.get("panel_area") or (20000.0 if actual_station_id == "ST-002" else 30000.0))
+        efficiency = float(kwargs.get("efficiency") or 0.185)
 
         est_kw, delta_p, alert, rec = _evaluate_rule_based_advisory(
             panel_area=panel_area,
@@ -369,7 +576,7 @@ async def run_inference(
         )
 
         logger.info(f"[Inference Result] Avg GHI: {avg_forecast_ghi:.1f} W/m2, P_gen: {est_kw} kW, Delta_P: {delta_p} kW")
-        logger.info(f"[Decision Advisory] Alert: {alert} | Trend: {cloud_trend} | Recommendation: {rec}")
+        logger.info(f"[Decision Advisory] Alert: {alert} | Trend: {cloud_trend} | BESS: {bess_advisory}")
 
         result = {
             "job_id": job_id,
@@ -378,6 +585,8 @@ async def run_inference(
             "predicted_at": now.isoformat(),
             "forecast_horizon_hours": 3,
             "ghi_forecast_curve": ghi_curve,
+            "ghi_forecast_lstm_raw": raw_ghi_curve,
+            "cloud_indices": ci_array,
             "estimated_power_kw": est_kw,
             "target_power_kw": target_power_kw,
             "delta_p_kw": delta_p,
@@ -385,6 +594,7 @@ async def run_inference(
             "confidence": confidence,
             "alert_level": alert,
             "recommendation_text": rec,
+            "bess_advisory": bess_advisory,
         }
 
         # ── 2. OpenTelemetry & Prometheus Metrics ─────────────────────

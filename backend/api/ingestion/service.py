@@ -24,6 +24,41 @@ NICT_BASE_IMG_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106"
 SATELLITE_BUCKET = "satellite-cache"
 
 
+NICT_B03_BASE_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03"
+
+
+def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = 1100) -> tuple[int, int]:
+    """Convert (latitude, longitude) to pixel coordinates in Himawari Level-2d 1100x1100 grid."""
+    import math
+
+    sub_lon = 140.7
+    scale = full_disk_size / 5500.0
+    cfac = 20466275
+    lfac = 20466275
+    coff = 2750.5 * scale
+    loff = 2750.5 * scale
+    req = 6378.1370
+    rpol = 6356.7523
+
+    lat = math.radians(lat_deg)
+    lon = math.radians(lon_deg)
+    sub_lon_r = math.radians(sub_lon)
+
+    c_lat = math.atan(((rpol**2) / (req**2)) * math.tan(lat))
+    rc = rpol / math.sqrt(1.0 - (((req**2 - rpol**2) / (req**2)) * (math.cos(c_lat)**2)))
+
+    rx = 42164.0 - rc * math.cos(c_lat) * math.cos(lon - sub_lon_r)
+    ry = -rc * math.cos(c_lat) * math.sin(lon - sub_lon_r)
+    rz = rc * math.sin(c_lat)
+
+    x = math.atan(-ry / rx)
+    y = math.asin(rz / math.sqrt(rx**2 + ry**2 + rz**2))
+
+    col = coff + x * (2**-16) * cfac * (180.0 / math.pi) * scale
+    row = loff - y * (2**-16) * lfac * (180.0 / math.pi) * scale
+    return int(round(col)), int(round(row))
+
+
 class IngestionService:
     @staticmethod
     def fetch_open_meteo_live(lat: float, lon: float) -> dict:
@@ -40,12 +75,11 @@ class IngestionService:
     @staticmethod
     def fetch_nict_realtime_image() -> tuple[Optional[bytes], datetime, str]:
         """Fetch latest Himawari 550x550 PNG image from NICT Japan."""
-        # 1. Check latest.json
         req = urllib.request.Request(NICT_LATEST_JSON, headers={"User-Agent": "SolarForecastDSS/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             latest_info = json.loads(resp.read().decode())
 
-        date_str = latest_info.get("date")  # e.g. "2026-09-29 07:50:00"
+        date_str = latest_info.get("date")
         dt_utc = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
         yyyy = dt_utc.strftime("%Y")
@@ -85,6 +119,81 @@ class IngestionService:
             return None, dt_utc, ""
 
     @staticmethod
+    def fetch_station_b03_crop(
+        target_dt: datetime, lat: float, lon: float, crop_size: int = 64
+    ) -> tuple[Optional[bytes], datetime, str]:
+        """Fetch Himawari Level-2d B03 tile and crop 64x64 patch centered on station coordinates."""
+        from PIL import Image
+        import numpy as np
+
+        minute = (target_dt.minute // 10) * 10
+        dt_utc = target_dt.replace(minute=minute, second=0, microsecond=0)
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+
+        yyyy = dt_utc.strftime("%Y")
+        mm = dt_utc.strftime("%m")
+        dd = dt_utc.strftime("%d")
+        hhmmss = dt_utc.strftime("%H%M%S")
+
+        img_url = f"{NICT_B03_BASE_URL}/2d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
+        img_req = urllib.request.Request(img_url, headers={"User-Agent": "SolarForecastDSS/1.0"})
+        try:
+            with urllib.request.urlopen(img_req, timeout=15) as img_resp:
+                raw_bytes = img_resp.read()
+            img = Image.open(io.BytesIO(raw_bytes))
+            arr = np.array(img)
+            band_data = arr[:, :, 1] if (arr.ndim == 3 and arr.shape[2] >= 2) else arr
+            if band_data.ndim == 3:
+                band_data = band_data[:, :, 0]
+
+            col, row = latlon_to_pixel(lat, lon)
+            half = crop_size // 2
+            crop_arr = band_data[row - half : row + half, col - half : col + half]
+            if crop_arr.shape != (crop_size, crop_size):
+                crop_arr = np.array(Image.fromarray(crop_arr).resize((crop_size, crop_size), Image.Resampling.BILINEAR))
+
+            buf = io.BytesIO()
+            Image.fromarray(crop_arr).save(buf, format="PNG")
+            cropped_bytes = buf.getvalue()
+            filename = f"b03_{yyyy}{mm}{dd}_{hhmmss}.png"
+            return cropped_bytes, dt_utc, filename
+        except Exception:
+            return None, dt_utc, ""
+
+    @staticmethod
+    def fetch_station_rgb_crop(
+        target_dt: datetime, lat: float, lon: float, crop_size: int = 64
+    ) -> tuple[Optional[bytes], datetime, str]:
+        """Fetch Himawari Level-2d true-color RGB tile and crop 64x64 centered on station."""
+        from PIL import Image
+
+        minute = (target_dt.minute // 10) * 10
+        dt_utc = target_dt.replace(minute=minute, second=0, microsecond=0)
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+
+        yyyy = dt_utc.strftime("%Y")
+        mm = dt_utc.strftime("%m")
+        dd = dt_utc.strftime("%d")
+        hhmmss = dt_utc.strftime("%H%M%S")
+
+        img_url = f"{NICT_BASE_IMG_URL}/2d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
+        img_req = urllib.request.Request(img_url, headers={"User-Agent": "SolarForecastDSS/1.0"})
+        try:
+            with urllib.request.urlopen(img_req, timeout=15) as img_resp:
+                raw_bytes = img_resp.read()
+            tile = Image.open(io.BytesIO(raw_bytes))
+            col, row = latlon_to_pixel(lat, lon)
+            half = crop_size // 2
+            crop_img = tile.crop((col - half, row - half, col + half, row + half))
+            buf = io.BytesIO()
+            crop_img.save(buf, format="PNG")
+            return buf.getvalue(), dt_utc, f"rgb_{yyyy}{mm}{dd}_{hhmmss}.png"
+        except Exception:
+            return None, dt_utc, ""
+
+    @staticmethod
     async def trigger_ingest(station_id: str, db: AsyncSession) -> IngestTriggerResponse:
         """Trigger an immediate live ingestion of weather + satellite imagery."""
         station = await StationService.get_station_by_id(db, station_id)
@@ -117,9 +226,13 @@ class IngestionService:
         except Exception as e:
             print(f"[Ingest Warning] Failed to fetch weather: {e}")
 
-        # 2. Fetch & store NICT satellite image
+        # 2. Fetch & store NICT satellite image (Cropped B03 for station)
         try:
-            img_bytes, dt_frame, filename = IngestionService.fetch_nict_realtime_image()
+            img_bytes, dt_frame, filename = IngestionService.fetch_station_b03_crop(
+                datetime.now(timezone.utc), station.latitude, station.longitude
+            )
+            if not img_bytes:
+                img_bytes, dt_frame, filename = IngestionService.fetch_nict_realtime_image()
             if img_bytes:
                 storage = StorageService()
                 try:
@@ -447,9 +560,16 @@ class IngestionService:
         except Exception:
             pass
 
+        # Retrieve station for localized coordinates
+        station = await StationService.get_station_by_id(db, station_id)
+
         backfilled_count = 0
         for ts in missing_ts:
-            img_bytes, dt_frame, filename = IngestionService.fetch_nict_historical_image(ts)
+            img_bytes, dt_frame, filename = IngestionService.fetch_station_b03_crop(
+                ts, station.latitude, station.longitude
+            )
+            if not img_bytes:
+                img_bytes, dt_frame, filename = IngestionService.fetch_nict_historical_image(ts)
             if img_bytes and filename:
                 object_name = f"{station_id}/{filename}"
                 storage.upload_file(
@@ -466,6 +586,18 @@ class IngestionService:
                 )
                 db.add(frame_meta)
                 backfilled_count += 1
+
+        if backfilled_count > 0 and img_bytes:
+            try:
+                storage.upload_file(
+                    bucket_name=SATELLITE_BUCKET,
+                    object_name=f"{station_id}_latest.png",
+                    data=io.BytesIO(img_bytes),
+                    length=len(img_bytes),
+                    content_type="image/png",
+                )
+            except Exception:
+                pass
 
         await db.commit()
         return {

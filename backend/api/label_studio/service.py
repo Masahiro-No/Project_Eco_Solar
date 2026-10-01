@@ -27,3 +27,22 @@ class LabelStudioService:
     def create_task(self, project_id: int, data: dict):
         """สร้าง task ใหม่ใน project."""
         return self.client.tasks.create(project=project_id, data=data)
+
+    def create_annotation(self, task_id: int, result: list[dict], ground_truth: bool = True):
+        """บันทึก annotation สำหรับ task."""
+        return self.client.annotations.create(id=task_id, result=result, ground_truth=ground_truth)
+
+    def list_annotations(self, task_id: int) -> list:
+        """คืนรายการ annotations ของ task."""
+        return list(self.client.annotations.list(task=task_id))
+
+    def get_task(self, task_id: int):
+        """คืนข้อมูล task."""
+        return self.client.tasks.get(id=str(task_id))
+
+    def get_or_create_project(self, title: str, label_config: str):
+        """คืน project ถ้ามีอยู่แล้ว หรือสร้างใหม่ถ้ายังไม่มี."""
+        for p in self.list_projects():
+            if p.title == title:
+                return p
+        return self.create_project(title=title, label_config=label_config)
