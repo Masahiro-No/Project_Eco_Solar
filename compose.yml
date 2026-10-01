@@ -119,9 +119,11 @@ services:
     environment:
       database_url: "postgresql+asyncpg://myuser:mypassword@postgres/mydatabase"
       label_studio_url: "http://label-studio:8080"
+      label_studio_api_key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc5MDk1MTIwMiwiaWF0IjoxNzkwODY0ODAyLCJqdGkiOiI4ODQ1NWEzNzk3Mzk0NDI3OWZhMjI2Mjk5YTZlYWYwYyIsInVzZXJfaWQiOiIxIn0.g6xdTALwRbv6YbZ9ghS0wP4w8fgfkdc59GXGKwDEdPc"
       minio_endpoint: "minio:9000"
       redis_host: "redis"
       redis_port: "6379"
+      ENABLE_RETRAIN: "false"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "fastapi"
       OTEL_RESOURCE_ATTRIBUTES: "service.version=0.1.0"
@@ -160,6 +162,7 @@ services:
       MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
       AWS_ACCESS_KEY_ID: "admin"
       AWS_SECRET_ACCESS_KEY: "password"
+      ENABLE_RETRAIN: "false"
       LOG_DIR: /workspace/logs
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "trainer-worker"

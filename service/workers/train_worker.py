@@ -17,6 +17,9 @@ from pathlib import Path
 
 from minio import Minio
 from minio.error import S3Error
+
+from service.training.retrain_timeseries import execute_timeseries_retrain
+from service.training.retrain_convlstm import execute_convlstm_retrain
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -422,4 +425,40 @@ async def train_model(ctx: dict, dataset_name: str = "conll2003", model_name: st
         "mlflow_run_id": mlflow_run_id,
         "registered_model_name": registered_model_name,
     }
+
+
+async def train_timeseries_lstm(ctx: dict, job_payload_json: str = "{}") -> str:
+    """ARQ Worker Job: Incremental fine-tuning for Time-Series LSTM (Safe Standby)."""
+    job_id: str = ctx.get("job_id", datetime.now().strftime("%Y%m%d%H%M%S"))
+    logger = setup_logger(job_id)
+    logger.info(f">> [ARQ Job] train_timeseries_lstm started  job_id={job_id}")
+
+    try:
+        import json
+        payload = json.loads(job_payload_json) if isinstance(job_payload_json, str) else job_payload_json
+    except Exception:
+        payload = {}
+
+    result = execute_timeseries_retrain(payload)
+    logger.info(f"[ARQ Job] train_timeseries_lstm result: {result}")
+    import json
+    return json.dumps(result)
+
+
+async def train_convlstm_nowcaster(ctx: dict, job_payload_json: str = "{}") -> str:
+    """ARQ Worker Job: Batch retraining for Spatio-temporal Seq2Seq ConvLSTM (Safe Standby)."""
+    job_id: str = ctx.get("job_id", datetime.now().strftime("%Y%m%d%H%M%S"))
+    logger = setup_logger(job_id)
+    logger.info(f">> [ARQ Job] train_convlstm_nowcaster started  job_id={job_id}")
+
+    try:
+        import json
+        payload = json.loads(job_payload_json) if isinstance(job_payload_json, str) else job_payload_json
+    except Exception:
+        payload = {}
+
+    result = execute_convlstm_retrain(payload)
+    logger.info(f"[ARQ Job] train_convlstm_nowcaster result: {result}")
+    import json
+    return json.dumps(result)
 

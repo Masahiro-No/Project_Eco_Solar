@@ -22,5 +22,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int
     redis_host: str = "localhost"
     redis_port: int = 6379
+    enable_retrain: bool = False
+    convlstm_retrain_threshold: int = 50
 
 settings = Settings()
