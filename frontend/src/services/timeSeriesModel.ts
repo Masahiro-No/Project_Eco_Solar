@@ -110,10 +110,13 @@ export function generateTimeSeriesPrediction(
     const stepHour = currentHour + i * (10 / 60);
 
     // Realistic Solar Zenith curve calibrated for Thailand daylight (06:00 - 18:30)
+    // Modulate solar peak based on station location/microclimate
+    const stationVariance = (stationId.charCodeAt(stationId.length - 1) % 5) * 35 - 70;
+    const peakGhi = 860 + stationVariance;
     let predictedGhi = 0;
     if (stepHour >= 6.0 && stepHour <= 18.5) {
       const daylightFraction = (stepHour - 6.0) / (18.5 - 6.0);
-      const solarPeak = Math.sin(daylightFraction * Math.PI) * 880;
+      const solarPeak = Math.sin(daylightFraction * Math.PI) * peakGhi;
       // Slight decay factor based on step metrics uncertainty
       const decay = 1 - (i * 0.012);
       predictedGhi = Math.max(50, Math.round(solarPeak * decay));

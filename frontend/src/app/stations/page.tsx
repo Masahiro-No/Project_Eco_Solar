@@ -14,15 +14,45 @@ import {
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
-import { stations as defaultStations, StationDashboardItem } from '@/data/dashboard';
 import { solarApi, StationCreateRequest, NearestStationResponse } from '@/services/api';
+
+export interface StationDashboardItem {
+  id: string;
+  name: string;
+  province: string;
+  latitude: number;
+  longitude: number;
+  panel_area: number;
+  efficiency: number;
+  target_capacity_kw: number;
+  is_active: boolean;
+  pgen: number;
+  ptarget: number;
+  online: boolean;
+  inverters: string;
+  pr: string;
+  temp: string;
+  alert_level?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+function getStationProvince(name: string): string {
+  if (name.includes('หาดใหญ่') || name.includes('Hat Yai')) return 'สงขลา (หาดใหญ่)';
+  if (name.includes('สงขลา') || name.includes('Songkhla')) return 'สงขลา';
+  if (name.includes('นครศรีธรรมราช') || name.includes('Nakhon Si Thammarat')) return 'นครศรีธรรมราช';
+  if (name.includes('ปัตตานี') || name.includes('Pattani')) return 'ปัตตานี';
+  if (name.includes('ตรัง') || name.includes('Trang')) return 'ตรัง';
+  if (name.includes('สระบุรี') || name.includes('Saraburi')) return 'สระบุรี';
+  return 'ภาคใต้ (Southern Region)';
+}
 
 export default function StationsPage() {
   const t = useTranslations('common');
-  const [stationList, setStationList] = useState<StationDashboardItem[]>(defaultStations);
+  const [stationList, setStationList] = useState<StationDashboardItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'online' | 'offline'>('all');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -31,7 +61,7 @@ export default function StationsPage() {
 
   // New Station Form State
   const [newStation, setNewStation] = useState<StationCreateRequest>({
-    id: `ST-00${stationList.length + 1}`,
+    id: '',
     name: '',
     latitude: 7.0086,
     longitude: 100.4988,
@@ -44,38 +74,39 @@ export default function StationsPage() {
   const [queryLat, setQueryLat] = useState('7.0086');
   const [queryLon, setQueryLon] = useState('100.4988');
 
-  // Load from API on mount
-  useEffect(() => {
-    async function loadStations() {
-      setIsLoading(true);
-      const apiStations = await solarApi.getStations();
-      if (apiStations && apiStations.length > 0) {
-        // Merge API stations with operational display fields
-        const merged: StationDashboardItem[] = apiStations.map((s) => {
-          const defaultMatch = defaultStations.find((d) => d.id === s.id);
-          const pgen = defaultMatch ? defaultMatch.pgen : Math.round(s.target_capacity_kw * 0.82);
-          return {
-            id: s.id,
-            name: s.name,
-            province: defaultMatch?.province || 'Southern Region',
-            latitude: s.latitude,
-            longitude: s.longitude,
-            panel_area: s.panel_area,
-            efficiency: s.efficiency,
-            target_capacity_kw: s.target_capacity_kw,
-            is_active: s.is_active,
-            pgen: s.is_active ? pgen : 0,
-            ptarget: s.target_capacity_kw,
-            online: s.is_active,
-            inverters: defaultMatch?.inverters || `${Math.round(s.target_capacity_kw / 500)}/${Math.round(s.target_capacity_kw / 500)}`,
-            pr: defaultMatch?.pr || `${(s.efficiency * 100 * 4.6).toFixed(1)}%`,
-            temp: defaultMatch?.temp || '32.0°C',
-          };
-        });
-        setStationList(merged);
-      }
-      setIsLoading(false);
+  // Load directly from Backend Database
+  const loadStations = async () => {
+    setIsLoading(true);
+    const apiStations = await solarApi.getStations(100, 0, true);
+    if (apiStations && apiStations.length > 0) {
+      const items: StationDashboardItem[] = apiStations.map((s) => ({
+        id: s.id,
+        name: s.name,
+        province: s.province || getStationProvince(s.name),
+        latitude: s.latitude,
+        longitude: s.longitude,
+        panel_area: s.panel_area,
+        efficiency: s.efficiency,
+        target_capacity_kw: s.target_capacity_kw,
+        is_active: s.is_active,
+        pgen: s.current_pgen_kw ?? (s.is_active ? Math.round(s.target_capacity_kw * 0.82) : 0),
+        ptarget: Math.round(s.target_capacity_kw),
+        online: s.is_active,
+        alert_level: s.alert_level || (s.is_active ? 'Normal' : 'Offline'),
+        inverters: `${Math.round(s.target_capacity_kw / 500)}/${Math.round(s.target_capacity_kw / 500)}`,
+        pr: `${(s.efficiency * 100 * 4.6).toFixed(1)}%`,
+        temp: '32.0°C',
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+      }));
+      setStationList(items);
+    } else {
+      setStationList([]);
     }
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
     loadStations();
   }, []);
 
@@ -95,100 +126,57 @@ export default function StationsPage() {
   const totalPgen = stationList.reduce((sum, s) => sum + s.pgen, 0);
   const onlineCount = stationList.filter((s) => s.is_active).length;
 
-  // Handle Add Station
+  // Handle Add Station via Backend API
   const handleCreateStation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStation.name) return;
 
-    // Call backend API (with graceful local fallback)
-    const res = await solarApi.createStation(newStation);
-
-    const createdItem: StationDashboardItem = {
-      id: res?.id || newStation.id || `ST-00${stationList.length + 1}`,
-      name: newStation.name,
-      province: 'Southern Region',
-      latitude: newStation.latitude,
-      longitude: newStation.longitude,
-      panel_area: newStation.panel_area,
-      efficiency: newStation.efficiency,
-      target_capacity_kw: newStation.target_capacity_kw,
-      is_active: true,
-      pgen: Math.round(newStation.target_capacity_kw * 0.8),
-      ptarget: newStation.target_capacity_kw,
-      online: true,
-      inverters: `${Math.round(newStation.target_capacity_kw / 500)}/${Math.round(newStation.target_capacity_kw / 500)}`,
-      pr: `${(newStation.efficiency * 100 * 4.6).toFixed(1)}%`,
-      temp: '32.0°C',
+    const payload: StationCreateRequest = {
+      ...newStation,
+      id: newStation.id ? newStation.id.trim() : undefined,
     };
+    const res = await solarApi.createStation(payload);
 
-    setStationList((prev) => [createdItem, ...prev]);
-    setShowCreateModal(false);
-    setNewStation({
-      id: `ST-00${stationList.length + 2}`,
-      name: '',
-      latitude: 7.0086,
-      longitude: 100.4988,
-      panel_area: 25000,
-      efficiency: 0.185,
-      target_capacity_kw: 4000,
-    });
+    if (res) {
+      await loadStations();
+      setShowCreateModal(false);
+      setNewStation({
+        id: '',
+        name: '',
+        latitude: 7.0086,
+        longitude: 100.4988,
+        panel_area: 25000,
+        efficiency: 0.185,
+        target_capacity_kw: 4000,
+      });
+    } else {
+      alert('ไม่สามารถลงทะเบียนสถานีบน Backend ได้ กรุณาลองใหม่อีกครั้ง');
+    }
   };
 
-  // Handle Soft-Delete
+  // Handle Soft-Delete / Restore via Backend API
   const handleToggleActive = async (id: string, currentActive: boolean) => {
+    setIsLoading(true);
     if (currentActive) {
       await solarApi.deleteStation(id);
     } else {
       await solarApi.restoreStation(id);
     }
-    setStationList((prev) =>
-      prev.map((s) =>
-        s.id === id
-          ? { ...s, is_active: !currentActive, online: !currentActive, pgen: !currentActive ? Math.round(s.target_capacity_kw * 0.8) : 0 }
-          : s
-      )
-    );
+    await loadStations();
   };
 
-  // Handle Find Nearest
+  // Handle Find Nearest via Backend API
   const handleFindNearest = async (e: React.FormEvent) => {
     e.preventDefault();
     const lat = parseFloat(queryLat);
     const lon = parseFloat(queryLon);
     if (isNaN(lat) || isNaN(lon)) return;
 
-    // Call API or calculate locally
     const res = await solarApi.findNearestStation(lat, lon);
     if (res) {
       setNearestResult(res);
     } else {
-      // Local fallback calculation (Haversine formula)
-      let minDistance = Infinity;
-      let nearestItem = stationList[0];
-      stationList.forEach((s) => {
-        const dLat = ((s.latitude - lat) * Math.PI) / 180;
-        const dLon = ((s.longitude - lon) * Math.PI) / 180;
-        const a =
-          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-          Math.cos((lat * Math.PI) / 180) *
-            Math.cos((s.latitude * Math.PI) / 180) *
-            Math.sin(dLon / 2) *
-            Math.sin(dLon / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        const dist = 6371 * c; // Earth radius in km
-        if (dist < minDistance) {
-          minDistance = dist;
-          nearestItem = s;
-        }
-      });
-      setNearestResult({
-        station_id: nearestItem.id,
-        name: nearestItem.name,
-        latitude: nearestItem.latitude,
-        longitude: nearestItem.longitude,
-        target_capacity_kw: nearestItem.target_capacity_kw,
-        distance_km: Math.round(minDistance * 10) / 10,
-      });
+      alert('ไม่สามารถค้นหาสถานีใกล้เคียงจาก Backend ได้');
     }
   };
 
@@ -365,54 +353,72 @@ export default function StationsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-line bg-white">
-              {filtered.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50/70 transition-colors">
-                  <td className="px-4 py-3 font-bold text-brand tabular-nums">
-                    <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px]">{s.id}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="font-bold text-ink">{s.name}</div>
-                    <div className="text-[11px] text-slate-500">{s.province}</div>
-                  </td>
-                  <td className="px-4 py-3 text-slate-600 tabular-nums font-mono text-[12px]">
-                    {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}
-                  </td>
-                  <td className="px-4 py-3 text-right font-medium text-slate-700 tabular-nums">
-                    {s.panel_area.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center font-medium text-slate-700 tabular-nums">
-                    {(s.efficiency * 100).toFixed(1)}%
-                  </td>
-                  <td className="px-4 py-3 text-right font-semibold text-slate-700 tabular-nums">
-                    {s.target_capacity_kw.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-right font-bold text-ink tabular-nums">
-                    {s.is_active ? s.pgen.toLocaleString() : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold ${
-                        s.is_active ? 'bg-ok-soft text-ok' : 'bg-bad-soft text-bad'
-                      }`}
-                    >
-                      <span className={`h-2 w-2 rounded-full ${s.is_active ? 'bg-ok' : 'bg-bad'}`} />
-                      {s.is_active ? t('online') : t('offline')}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={() => handleToggleActive(s.id, s.is_active)}
-                      className={`rounded px-2.5 py-1 text-[11.5px] font-semibold transition ${
-                        s.is_active
-                          ? 'border border-red-200 text-bad hover:bg-bad-soft'
-                          : 'border border-ok/30 text-ok hover:bg-ok-soft'
-                      }`}
-                    >
-                      {s.is_active ? t('soft_delete_action') : t('restore_action')}
-                    </button>
+              {isLoading && stationList.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="py-10 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <RefreshCwIcon className="h-5 w-5 animate-spin text-brand" />
+                      <span className="text-[13px] font-medium">กำลังโหลดข้อมูลสถานีจาก Backend Database...</span>
+                    </div>
                   </td>
                 </tr>
-              ))}
+              ) : filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="py-10 text-center text-slate-500">
+                    <p className="text-[14px] font-semibold text-slate-700">ไม่พบข้อมูลสถานีในระบบฐานข้อมูล</p>
+                    <p className="text-[12px] text-slate-400 mt-1">สามารถกดปุ่ม &quot;{t('station_btn_add')}&quot; เพื่อลงทะเบียนสถานีใหม่ได้</p>
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50/70 transition-colors">
+                    <td className="px-4 py-3 font-bold text-brand tabular-nums">
+                      <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px]">{s.id}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-bold text-ink">{s.name}</div>
+                      <div className="text-[11px] text-slate-500">{s.province}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 tabular-nums font-mono text-[12px]">
+                      {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-700 tabular-nums">
+                      {s.panel_area.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-center font-medium text-slate-700 tabular-nums">
+                      {(s.efficiency * 100).toFixed(1)}%
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-700 tabular-nums">
+                      {s.target_capacity_kw.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold text-ink tabular-nums">
+                      {s.is_active ? s.pgen.toLocaleString() : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-bold ${
+                          s.is_active ? 'bg-ok-soft text-ok' : 'bg-bad-soft text-bad'
+                        }`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${s.is_active ? 'bg-ok' : 'bg-bad'}`} />
+                        {s.is_active ? t('online') : t('offline')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => handleToggleActive(s.id, s.is_active)}
+                        className={`rounded px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                          s.is_active
+                            ? 'border border-red-200 text-bad hover:bg-bad-soft'
+                            : 'border border-ok/30 text-ok hover:bg-ok-soft'
+                        }`}
+                      >
+                        {s.is_active ? t('soft_delete_action') : t('restore_action')}
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

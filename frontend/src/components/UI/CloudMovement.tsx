@@ -41,7 +41,7 @@ const FALLBACK_IMAGE = '/2de8a7c6-3c78-4961-9471-af149bf0e789.jpg';
 
 export function CloudMovement() {
   const t = useTranslations('common');
-  const { prediction } = useForecast();
+  const { prediction, selectedStationId } = useForecast();
 
   // Satellite latest frame state
   const [latestFrame, setLatestFrame] = useState<SatelliteFrameItem | null>(null);
@@ -58,9 +58,10 @@ export function CloudMovement() {
   const fetchData = async () => {
     try {
       setIsRefreshing(true);
+      const stId = selectedStationId || 'ST-001';
       const [framesRes, cloudRes] = await Promise.all([
-        solarApi.getSatelliteFrames('ST-001', 1), // Fetch only the single latest frame
-        solarApi.getCloudPrediction('ST-001'),
+        solarApi.getSatelliteFrames(stId, 1), // Fetch only the single latest frame
+        solarApi.getCloudPrediction(stId),
       ]);
 
       if (framesRes && framesRes.length > 0) {
@@ -84,7 +85,7 @@ export function CloudMovement() {
     // Auto-refresh real satellite feed & cloud prediction every 5 minutes
     const interval = setInterval(fetchData, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedStationId]);
 
   // Synchronize Cloud Prediction with API response or model prediction
   const currentClasses = cloudData?.classes || (prediction?.cloud_trend ? cloudClasses.map((c) => {

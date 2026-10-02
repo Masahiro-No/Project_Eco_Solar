@@ -2,8 +2,8 @@
 
 import React from 'react';
 import { ZapIcon, TargetIcon, TriangleIcon, RadioTowerIcon } from 'lucide-react';
-import { kpis, stations } from '@/data/dashboard';
 import { useTranslations } from 'next-intl';
+import { useForecast } from '@/context/ForecastContext';
 
 const icons: Record<string, { icon: React.ReactNode; bg: string }> = {
   pgen: { icon: <ZapIcon className="h-5 w-5 text-ok" fill="currentColor" />, bg: 'bg-ok-soft' },
@@ -28,11 +28,62 @@ const noteMap: Record<string, KpiNoteKey> = {
 
 export function KpiRow() {
   const t = useTranslations('common');
-  const online = stations.filter((s) => s.online).length;
+  const { stations, selectedStation, prediction, localPrediction } = useForecast();
+
+  const activeStations = stations || [];
+  const online = activeStations.filter((s) => s.is_active).length;
+
+  const currentPgen = prediction
+    ? Math.round(prediction.estimated_power_kw)
+    : localPrediction
+    ? Math.round(localPrediction.estimated_power_kw)
+    : 4250;
+
+  const currentPtarget = prediction
+    ? Math.round(prediction.target_power_kw)
+    : selectedStation
+    ? Math.round(selectedStation.target_capacity_kw)
+    : 5000;
+
+  const currentDp = currentPtarget - currentPgen;
+
+  const dynamicKpis = [
+    {
+      id: 'pgen',
+      label: 'กำลังผลิตรวมที่พยากรณ์ (P_gen)',
+      value: currentPgen.toLocaleString(),
+      unit: 'kW',
+      delta: '+8.4%',
+      trend: 'up' as const,
+      note: 'เทียบกับ 1 ชม. ก่อนหน้า',
+      spark: [30, 34, 31, 38, 36, 42, 40, 47, 45, Math.min(60, Math.max(10, Math.round((currentPgen / (currentPtarget || 5000)) * 60)))],
+      tone: 'ok' as const,
+    },
+    {
+      id: 'ptarget',
+      label: 'เป้าหมายการจ่ายไฟ (P_target)',
+      value: currentPtarget.toLocaleString(),
+      unit: 'kW',
+      note: selectedStation ? `เป้าหมายสถานี ${selectedStation.id}` : 'เป้าหมายสถานี ST-001',
+      spark: [50, 50, 50, 50, 50, 50, 50, 50, 50, 50],
+      tone: 'brand' as const,
+    },
+    {
+      id: 'dp',
+      label: 'ส่วนต่างกำลังผลิต (ΔP)',
+      value: Math.abs(currentDp).toLocaleString(),
+      unit: 'kW',
+      delta: currentDp > 0 ? '-Deficit' : '+Surplus',
+      trend: currentDp > 0 ? ('down' as const) : ('up' as const),
+      note: currentDp > 0 ? '(ต้องการสำรองไฟ)' : '(กำลังผลิตเพียงพอ)',
+      spark: [30, 32, 31, 36, 34, 40, 38, 44, 40, Math.min(60, Math.max(10, Math.round((Math.abs(currentDp) / (currentPtarget || 5000)) * 60)))],
+      tone: currentDp > 0 ? ('warn' as const) : ('ok' as const),
+    },
+  ];
 
   return (
     <div className="grid shrink-0 grid-cols-4 gap-3.5">
-      {kpis.map((k) => (
+      {dynamicKpis.map((k) => (
         <article key={k.id} className="flex gap-3 rounded-xl border border-line bg-white px-3.5 py-3 shadow-sm">
           <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${icons[k.id].bg}`}>
             {icons[k.id].icon}
@@ -48,14 +99,14 @@ export function KpiRow() {
                 </p>
                 <p className="mt-1.5 truncate text-[12px] text-muted">
                   {k.delta && (
-                    <span className="mr-1.5 font-bold text-ok">
+                    <span className={`mr-1.5 font-bold ${k.trend === 'up' ? 'text-ok' : 'text-warn'}`}>
                       {k.trend === 'up' ? '▲' : '▼'} {k.delta}
                     </span>
                   )}
                   {noteMap[k.id] ? t(noteMap[k.id]) : k.note}
                 </p>
               </div>
-              <Sparkline points={k.spark} color={k.tone === 'brand' ? '#3b82f6' : '#16a34a'} />
+              <Sparkline points={k.spark} color={k.tone === 'brand' ? '#3b82f6' : k.tone === 'warn' ? '#f59e0b' : '#16a34a'} />
             </div>
           </div>
         </article>
@@ -69,16 +120,16 @@ export function KpiRow() {
           <div className="mt-1 flex items-end justify-between">
             <div>
               <p className="text-[25px] font-bold leading-none text-ink">
-                {online} <span className="text-[15px] font-medium text-slate-500">/ {stations.length}</span>
+                {online} <span className="text-[15px] font-medium text-slate-500">/ {activeStations.length}</span>
               </p>
               <p className="mt-1.5 text-[12px] text-muted">{t('online')}</p>
             </div>
-            <div className="flex items-end gap-1.5" aria-label={`${online} of ${stations.length} stations online`}>
-              {stations.map((s, i) => (
+            <div className="flex items-end gap-1.5" aria-label={`${online} of ${activeStations.length} stations online`}>
+              {activeStations.map((s, i) => (
                 <span
                   key={s.id}
-                  className={`w-2.5 rounded-sm ${s.online ? 'bg-ok' : 'bg-slate-200'}`}
-                  style={{ height: [16, 20, 24, 20, 24][i] }}
+                  className={`w-2.5 rounded-sm ${s.is_active ? 'bg-ok' : 'bg-slate-200'}`}
+                  style={{ height: [16, 20, 24, 20, 24, 18][i % 6] }}
                 />
               ))}
             </div>

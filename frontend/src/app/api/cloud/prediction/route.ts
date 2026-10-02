@@ -92,7 +92,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const stationId = searchParams.get('station_id') || 'ST-001';
 
-  const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const backendUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   // 1. Attempt to fetch from Backend API first (if available)
   try {

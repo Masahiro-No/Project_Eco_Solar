@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
   const stationId = searchParams.get('station_id') || 'ST-001';
 
   // 1. Try Backend API first (if backend ingestion endpoint is active)
-  const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const backendUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   try {
     const authHeader = req.headers.get('authorization');
     const headers: Record<string, string> = {};

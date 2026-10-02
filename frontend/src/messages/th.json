@@ -66,6 +66,8 @@
     "th_inverters": "Inverters",
     "th_pr": "PR Ratio",
     "th_actions": "การจัดการ",
+    "station_actions": "การจัดการ",
+    "all_systems_operational": "ทุกระบบทำงานปกติสมบูรณ์",
 
     "decision_support_title": "ระบบสนับสนุนการตัดสินใจ",
     "decision_log_title": "บันทึกการตัดสินใจ",

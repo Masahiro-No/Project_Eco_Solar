@@ -1,14 +1,14 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { solarApi, PredictionResultData } from '@/services/api';
+import { solarApi, PredictionResultData, StationResponse } from '@/services/api';
 import {
   generateTimeSeriesPrediction,
   TIME_SERIES_MODEL_META,
   ModelMetadata,
   TimeSeriesPredictionOutput
 } from '@/services/timeSeriesModel';
-import { ghiData, powerData } from '@/data/dashboard';
+import { ghiData, powerData, stations as fallbackStations } from '@/data/dashboard';
 
 export type GhiChartPoint = {
   t: string;
@@ -24,10 +24,14 @@ export type PowerChartPoint = {
   gap: [number, number];
 };
 
-type ForecastContextType = {
+export type ForecastContextType = {
   isLive: boolean;
   isLocalModel: boolean;
   isLoading: boolean;
+  stations: StationResponse[];
+  selectedStationId: string;
+  selectedStation: StationResponse | null;
+  setSelectedStationId: (id: string) => void;
   prediction: PredictionResultData | null;
   localPrediction: TimeSeriesPredictionOutput | null;
   modelMeta: ModelMetadata;
@@ -36,10 +40,25 @@ type ForecastContextType = {
   chartPowerData: PowerChartPoint[];
 };
 
+const initialFallbackStations: StationResponse[] = fallbackStations.map((s) => ({
+  id: s.id,
+  name: s.name,
+  latitude: s.latitude,
+  longitude: s.longitude,
+  panel_area: s.panel_area,
+  efficiency: s.efficiency,
+  target_capacity_kw: s.target_capacity_kw,
+  is_active: s.is_active,
+}));
+
 const ForecastContext = createContext<ForecastContextType>({
   isLive: false,
   isLocalModel: true,
   isLoading: false,
+  stations: initialFallbackStations,
+  selectedStationId: 'ST-001',
+  selectedStation: initialFallbackStations[0],
+  setSelectedStationId: () => {},
   prediction: null,
   localPrediction: null,
   modelMeta: TIME_SERIES_MODEL_META,
@@ -50,41 +69,60 @@ const ForecastContext = createContext<ForecastContextType>({
 
 export function ForecastProvider({
   children,
-  currentStation = 'Hat Yai Solar Farm',
+  currentStation,
 }: {
   children: React.ReactNode;
   currentStation?: string;
 }) {
+  const [stations, setStations] = useState<StationResponse[]>(initialFallbackStations);
+  const [selectedStationId, setSelectedStationId] = useState<string>('ST-001');
   const [prediction, setPrediction] = useState<PredictionResultData | null>(null);
   const [localPrediction, setLocalPrediction] = useState<TimeSeriesPredictionOutput | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const fetchForecast = async (stationId: string = 'ST-001') => {
+  // 1. Fetch dynamic station list from Database API on mount
+  useEffect(() => {
+    async function loadStations() {
+      const list = await solarApi.getStations();
+      if (list && list.length > 0) {
+        setStations(list);
+      }
+    }
+    loadStations();
+  }, []);
+
+  const selectedStation = stations.find((s) => s.id === selectedStationId) || stations[0] || null;
+
+  const fetchForecast = async (stationId?: string) => {
+    const targetId = stationId || selectedStationId || 'ST-001';
     setIsLoading(true);
 
+    const st = stations.find((s) => s.id === targetId) || selectedStation;
+    const targetKw = st?.target_capacity_kw || 5000;
+    const panelArea = st?.panel_area || 30000;
+    const efficiency = st?.efficiency || 0.185;
+    const stationName = st?.name || currentStation || 'PSU Hat Yai Solar Farm (ม.อ. หาดใหญ่)';
+
     // 1. Try to fetch from live backend if available
-    const data = await solarApi.getLatestPrediction(stationId);
+    const data = await solarApi.getLatestPrediction(targetId);
     if (data && data.ghi_forecast_curve && data.ghi_forecast_curve.length > 0) {
       setPrediction(data);
       setIsLive(true);
     } else {
       // 2. Pure Frontend Time-Series Model Engine (Direct from model_meta.json specs)
       setIsLive(false);
-      const localResult = generateTimeSeriesPrediction(stationId, currentStation, 5000, 30000, 0.185);
+      const localResult = generateTimeSeriesPrediction(targetId, stationName, targetKw, panelArea, efficiency);
       setLocalPrediction(localResult);
     }
     setIsLoading(false);
   };
 
   useEffect(() => {
-    fetchForecast('ST-001');
-  }, [currentStation]);
+    fetchForecast(selectedStationId);
+  }, [selectedStationId]);
 
   // Build GHI Chart Data:
-  // - If live backend returned curve, use it
-  // - Otherwise, use the 18-step Time-Series LSTM model output from localPrediction
-  // - Fallback to ghiData if neither is ready
   let chartGhiData: GhiChartPoint[] = ghiData;
 
   if (isLive && prediction?.ghi_forecast_curve && prediction.ghi_forecast_curve.length > 0) {
@@ -121,22 +159,36 @@ export function ForecastProvider({
   let chartPowerData: PowerChartPoint[] = powerData;
 
   if (isLive && prediction) {
-    const target = prediction.target_power_kw || 850;
-    chartPowerData = powerData.map((d) => ({
-      ...d,
-      target,
-      gap: [d.gen, target] as [number, number],
-    }));
-  } else if (localPrediction && localPrediction.ghi_forecast_curve.length > 0) {
-    const target = localPrediction.target_power_kw || 850;
-    const curve = localPrediction.ghi_forecast_curve;
-    const timestamps = localPrediction.timestamps;
+    const target = prediction.target_power_kw || (selectedStation?.target_capacity_kw ?? 5000);
+    const curve = prediction.ghi_forecast_curve || [];
+    const panelArea = selectedStation?.panel_area || 30000;
+    const efficiency = selectedStation?.efficiency || 0.185;
 
-    // Sample points for power chart (every 20 or 30 mins)
     const sampledPower: PowerChartPoint[] = [];
     for (let i = 0; i < curve.length; i += 2) {
       const ghi = curve[i];
-      const pgen = Math.round((30000 * 0.185 * ghi) / 1000);
+      const pgen = Math.round((panelArea * efficiency * ghi) / 1000);
+      sampledPower.push({
+        t: `+${(i + 1) * 10}m`,
+        gen: pgen,
+        target,
+        gap: [pgen, target],
+      });
+    }
+    if (sampledPower.length > 0) {
+      chartPowerData = sampledPower;
+    }
+  } else if (localPrediction && localPrediction.ghi_forecast_curve.length > 0) {
+    const target = localPrediction.target_power_kw || (selectedStation?.target_capacity_kw ?? 5000);
+    const curve = localPrediction.ghi_forecast_curve;
+    const timestamps = localPrediction.timestamps;
+    const panelArea = selectedStation?.panel_area || 30000;
+    const efficiency = selectedStation?.efficiency || 0.185;
+
+    const sampledPower: PowerChartPoint[] = [];
+    for (let i = 0; i < curve.length; i += 2) {
+      const ghi = curve[i];
+      const pgen = Math.round((panelArea * efficiency * ghi) / 1000);
       sampledPower.push({
         t: timestamps[i] || `+${(i + 1) * 10}m`,
         gen: pgen,
@@ -155,6 +207,10 @@ export function ForecastProvider({
         isLive,
         isLocalModel: !isLive,
         isLoading,
+        stations,
+        selectedStationId,
+        selectedStation,
+        setSelectedStationId,
         prediction,
         localPrediction,
         modelMeta: TIME_SERIES_MODEL_META,
