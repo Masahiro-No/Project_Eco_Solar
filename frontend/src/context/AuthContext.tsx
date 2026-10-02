@@ -137,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
         return { success: false, error: detail };
       }
-    } catch (networkErr) {
+    } catch {
       console.info('[Backend Auth] API unreachable, using seamless offline demo mode.');
       // 2. Seamless Demo Fallback when backend server is offline
       const loggedUser: User = {

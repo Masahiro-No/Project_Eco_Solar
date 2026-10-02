@@ -11,13 +11,16 @@ const icons: Record<string, { icon: React.ReactNode; bg: string }> = {
   dp: { icon: <TriangleIcon className="h-5 w-5 text-ok" />, bg: 'bg-ok-soft' },
 };
 
-const labelMap: Record<string, string> = {
+type KpiLabelKey = 'kpi_pgen' | 'kpi_ptarget' | 'kpi_dp';
+type KpiNoteKey = 'compare_1h' | 'constant' | 'more_reserve';
+
+const labelMap: Record<string, KpiLabelKey> = {
   pgen: 'kpi_pgen',
   ptarget: 'kpi_ptarget',
   dp: 'kpi_dp',
 };
 
-const noteMap: Record<string, string> = {
+const noteMap: Record<string, KpiNoteKey> = {
   pgen: 'compare_1h',
   ptarget: 'constant',
   dp: 'more_reserve',
@@ -36,7 +39,7 @@ export function KpiRow() {
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="truncate text-[13px] font-medium text-slate-600">
-              {labelMap[k.id] ? t(labelMap[k.id] as any) : k.label}
+              {labelMap[k.id] ? t(labelMap[k.id]) : k.label}
             </h3>
             <div className="mt-1 flex items-end justify-between gap-2">
               <div className="min-w-0">
@@ -49,7 +52,7 @@ export function KpiRow() {
                       {k.trend === 'up' ? '▲' : '▼'} {k.delta}
                     </span>
                   )}
-                  {noteMap[k.id] ? t(noteMap[k.id] as any) : k.note}
+                  {noteMap[k.id] ? t(noteMap[k.id]) : k.note}
                 </p>
               </div>
               <Sparkline points={k.spark} color={k.tone === 'brand' ? '#3b82f6' : '#16a34a'} />

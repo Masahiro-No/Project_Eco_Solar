@@ -24,7 +24,7 @@ export interface StationCreateRequest extends StationBase {
   id?: string; // Optional custom ID (e.g. "ST-001")
 }
 
-export interface StationUpdateRequest extends StationBase {}
+export type StationUpdateRequest = StationBase;
 
 export interface StationPatchRequest {
   name?: string;
@@ -74,6 +74,23 @@ export interface PredictionResultData {
   alert_level: string;
   recommendation_text: string;
   satellite_image_url?: string;
+}
+
+export interface SatelliteFrameItem {
+  frame_no: number;
+  timestamp: string;
+  image_url: string;
+  time_label?: string;
+  source?: string;
+}
+
+export interface SatelliteFramesResponse {
+  status: string;
+  source: string;
+  station_id?: string;
+  total_frames: number;
+  latest_frame: SatelliteFrameItem;
+  frames: SatelliteFrameItem[];
 }
 
 export interface InferenceEnqueueResponse {
@@ -353,4 +370,121 @@ export const solarApi = {
     }
     return [];
   },
+
+  // ----------------------------------------
+  // Satellite Ingestion API
+  // ----------------------------------------
+
+  /**
+   * Fetch real-time Himawari-8/9 satellite frames sequence (10-minute cadence)
+   */
+  async getSatelliteFrames(
+    stationId: string = 'ST-001',
+    count: number = 12
+  ): Promise<SatelliteFrameItem[]> {
+    // 1. Try Next.js internal server route (seamlessly queries NICT / backend)
+    try {
+      const res = await fetch(`/api/satellite/frames?station_id=${stationId}&count=${count}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const data: SatelliteFramesResponse = await res.json();
+        if (data.frames && data.frames.length > 0) {
+          return data.frames;
+        }
+      }
+    } catch (err) {
+      console.info('[solarApi.getSatelliteFrames] Route handler fetch failed, using direct client fallback:', err);
+    }
+
+    // 2. Direct client fallback if API route is unreachable
+    try {
+      const now = new Date();
+      const approx = new Date(now.getTime() - 20 * 60 * 1000);
+      const minuteFloor = Math.floor(approx.getUTCMinutes() / 10) * 10;
+      const latestDt = new Date(Date.UTC(
+        approx.getUTCFullYear(),
+        approx.getUTCMonth(),
+        approx.getUTCDate(),
+        approx.getUTCHours(),
+        minuteFloor,
+        0
+      ));
+
+      const frames: SatelliteFrameItem[] = [];
+      for (let i = count - 1; i >= 0; i--) {
+        const frameDate = new Date(latestDt.getTime() - i * 10 * 60 * 1000);
+        const yyyy = frameDate.getUTCFullYear();
+        const mm = String(frameDate.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(frameDate.getUTCDate()).padStart(2, '0');
+        const hh = String(frameDate.getUTCHours()).padStart(2, '0');
+        const min = String(frameDate.getUTCMinutes()).padStart(2, '0');
+        const ss = String(frameDate.getUTCSeconds()).padStart(2, '0');
+
+        const thaiDate = new Date(frameDate.getTime() + 7 * 60 * 60 * 1000);
+        const thaiHours = String(thaiDate.getUTCHours()).padStart(2, '0');
+        const thaiMinutes = String(thaiDate.getUTCMinutes()).padStart(2, '0');
+
+        frames.push({
+          frame_no: count - i,
+          timestamp: frameDate.toISOString(),
+          image_url: `https://himawari8-dl.nict.go.jp/himawari8/img/D531106/1d/550/${yyyy}/${mm}/${dd}/${hh}${min}${ss}_0_0.png`,
+          time_label: `${thaiHours}:${thaiMinutes} น.`,
+          source: 'nict_direct',
+        });
+      }
+      return frames;
+    } catch {
+      return [];
+    }
+  },
+
+  // ----------------------------------------
+  // ConvLSTM Cloud Movement API
+  // ----------------------------------------
+
+  /**
+   * Fetch ConvLSTM cloud movement prediction & 4-class probabilities
+   */
+  async getCloudPrediction(stationId: string = 'ST-001'): Promise<CloudPredictionResponse | null> {
+    try {
+      const res = await fetch(`/api/cloud/prediction?station_id=${stationId}`, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.info('[solarApi.getCloudPrediction] Fetch failed:', err);
+    }
+    return null;
+  },
 };
+
+export interface CloudPredictionResponse {
+  status: string;
+  station_id: string;
+  cloud_trend: string;
+  confidence: number;
+  top_class: {
+    id: 'clear' | 'inward' | 'outward' | 'overcast';
+    name: string;
+    th: string;
+    pct: number;
+    tone: 'ok' | 'brand' | 'warn' | 'muted';
+  };
+  classes: {
+    id: 'clear' | 'inward' | 'outward' | 'overcast';
+    name: string;
+    th: string;
+    pct: number;
+    tone: 'ok' | 'brand' | 'warn' | 'muted';
+  }[];
+  description: string;
+  bess_advisory: string;
+  source: string;
+  updated_at: string;
+}
+
