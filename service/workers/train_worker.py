@@ -17,9 +17,6 @@ from pathlib import Path
 
 from minio import Minio
 from minio.error import S3Error
-
-from service.training.retrain_timeseries import execute_timeseries_retrain
-from service.training.retrain_convlstm import execute_convlstm_retrain
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -434,6 +431,12 @@ async def train_timeseries_lstm(ctx: dict, job_payload_json: str = "{}") -> str:
     logger.info(f">> [ARQ Job] train_timeseries_lstm started  job_id={job_id}")
 
     try:
+        from service.training.retrain_timeseries import execute_timeseries_retrain
+    except ImportError as e:
+        logger.warning(f"Could not import retrain_timeseries ({e})")
+        return '{"status": "skipped", "reason": "missing_dependencies"}'
+
+    try:
         import json
         payload = json.loads(job_payload_json) if isinstance(job_payload_json, str) else job_payload_json
     except Exception:
@@ -450,6 +453,12 @@ async def train_convlstm_nowcaster(ctx: dict, job_payload_json: str = "{}") -> s
     job_id: str = ctx.get("job_id", datetime.now().strftime("%Y%m%d%H%M%S"))
     logger = setup_logger(job_id)
     logger.info(f">> [ARQ Job] train_convlstm_nowcaster started  job_id={job_id}")
+
+    try:
+        from service.training.retrain_convlstm import execute_convlstm_retrain
+    except ImportError as e:
+        logger.warning(f"Could not import retrain_convlstm ({e})")
+        return '{"status": "skipped", "reason": "missing_dependencies"}'
 
     try:
         import json
