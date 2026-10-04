@@ -2,9 +2,11 @@ import bisect
 import json
 import logging
 import math
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from arq import create_pool
@@ -24,7 +26,6 @@ from core.config import settings
 logger = logging.getLogger("inference_service")
 
 INFERENCE_QUEUE = "inference_queue"
-LOOKBACK_STEPS = 144            # 24 h of 10-minute observations
 STEP_MINUTES = 10
 MAX_DATA_AGE_MINUTES = 20       # newest weather row older than this => do not predict
 PENDING_KEY = "solar:inference:pending"
@@ -48,8 +49,8 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _to_schema(pred: Prediction, station_name: str, worker_res: Optional[dict] = None) -> PredictionResultData:
-    worker_res = worker_res or {}
+def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:
+    level = pred.cloud_trend if pred.cloud_trend in ("low", "medium", "high") else None
     return PredictionResultData(
         job_id=pred.job_id,
         station_id=pred.station_id,
@@ -57,19 +58,48 @@ def _to_schema(pred: Prediction, station_name: str, worker_res: Optional[dict] =
         predicted_at=pred.predicted_at,
         forecast_horizon_hours=pred.forecast_horizon_hours,
         ghi_forecast_curve=pred.ghi_forecast_curve,
-        ghi_forecast_lstm_raw=worker_res.get("ghi_forecast_lstm_raw"),
-        cloud_indices=worker_res.get("cloud_indices"),
+        ghi_forecast_lstm_raw=pred.ghi_forecast_lstm_raw,
+        blend_weight=pred.blend_weight,
+        cloud_coverage_pct=pred.cloud_coverage_pct,
+        cloud_coverage_now_pct=pred.cloud_coverage_now_pct,
+        cloud_impact_level=level,
+        satellite_status=pred.satellite_status,
+        satellite_lag_minutes=pred.satellite_lag_minutes,
+        is_night=pred.is_night,
         estimated_power_kw=pred.estimated_power_kw,
         target_power_kw=pred.target_power_kw,
         delta_p_kw=pred.delta_p_kw,
+        reserve_kw=pred.reserve_kw,
         cloud_trend=pred.cloud_trend,
-        confidence=pred.confidence,
         alert_level=pred.alert_level,
         recommendation_text=pred.recommendation_text,
-        bess_advisory=worker_res.get("bess_advisory"),
         satellite_image_url=pred.satellite_frame_url,
+        model_version=pred.model_version,
         data_time=pred.data_time,
     )
+
+
+def deployed_lookback_steps() -> Optional[int]:
+    """Input length of the deployed LSTM, read from its model_meta.json (the single source of truth).
+
+    Returns None when the metadata cannot be read; callers then skip the run instead of guessing.
+    """
+    candidates = [
+        os.environ.get("SOLAR_MODEL_DIR"),
+        "/app/model/time-series",
+        "/workspace/model/time-series",
+        str(Path(__file__).resolve().parents[3] / "model" / "time-series"),
+    ]
+    for d in candidates:
+        if not d:
+            continue
+        meta_path = Path(d) / "model_meta.json"
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                return int(json.load(f)["lookback_steps"])
+        except (OSError, KeyError, ValueError):
+            continue
+    return None
 
 
 class InferenceService:
@@ -85,26 +115,30 @@ class InferenceService:
     # ------------------------------------------------------------------
     @staticmethod
     async def prepare_model_input(station_id: str, db: AsyncSession) -> ModelInput:
-        """Fetch the latest 144 weather records and compute the 16 aligned features.
+        """Fetch the newest weather window the deployed LSTM needs and compute the 16 aligned features.
 
         Returns a ModelInput whose `reason` explains why the data is NOT usable
-        (too little history, or the newest observation is stale), so callers skip
-        the run instead of predicting from old data.
+        (model metadata unreadable, too little history, or the newest observation is stale),
+        so callers skip the run instead of predicting from old or made-up data.
 
         CRITICAL TIMEZONE ALIGNMENT:
         Database timestamps are stored in UTC. The model was trained on cyclical hour
         encodings in Thailand local time (UTC+7), so each timestamp is converted first.
         """
+        lookback = deployed_lookback_steps()
+        if lookback is None:
+            return ModelInput(None, None, "model_meta_unavailable (cannot read lookback_steps of the deployed LSTM)")
+
         stmt = (
             select(WeatherHistory)
             .where(WeatherHistory.station_id == station_id)
             .order_by(WeatherHistory.timestamp.desc())
-            .limit(LOOKBACK_STEPS)
+            .limit(lookback)
         )
         res = await db.execute(stmt)
         records = list(reversed(res.scalars().all()))
-        if len(records) < LOOKBACK_STEPS:
-            return ModelInput(None, None, f"insufficient_history ({len(records)}/{LOOKBACK_STEPS} rows)")
+        if len(records) < lookback:
+            return ModelInput(None, None, f"insufficient_history ({len(records)}/{lookback} rows)")
 
         data_time = _as_utc(records[-1].timestamp)
         age = datetime.now(timezone.utc) - data_time
@@ -112,12 +146,12 @@ class InferenceService:
             return ModelInput(None, data_time, f"stale_data (newest observation is {int(age.total_seconds() // 60)} min old)")
 
         span_min = (data_time - _as_utc(records[0].timestamp)).total_seconds() / 60.0
-        expected = (LOOKBACK_STEPS - 1) * STEP_MINUTES
+        expected = (lookback - 1) * STEP_MINUTES
         if abs(span_min - expected) > expected * 0.25:
             # Not blocking, but the model expects a 10-minute grid: make the drift visible.
             logger.warning(
                 "[%s] weather history spans %.0f min, expected ~%d min for %d steps of %d min",
-                station_id, span_min, expected, LOOKBACK_STEPS, STEP_MINUTES,
+                station_id, span_min, expected, lookback, STEP_MINUTES,
             )
 
         features: list[list[float]] = []
@@ -184,6 +218,7 @@ class InferenceService:
             target_kw,
             model_version,
             weather_features=model_input.features,
+            data_time=model_input.data_time.isoformat(),
             station_lat=station.latitude,
             station_lon=station.longitude,
             panel_area=station.panel_area,
@@ -326,7 +361,7 @@ class InferenceService:
             return {"job_id": job_id, "status": job_status_value, "result": None}
 
         pred, station_name = row
-        return {"job_id": job_id, "status": "complete", "result": _to_schema(pred, station_name, worker_res)}
+        return {"job_id": job_id, "status": "complete", "result": _to_schema(pred, station_name)}
 
     @staticmethod
     async def get_latest_prediction(station_id: str, db: AsyncSession) -> PredictionResultData:

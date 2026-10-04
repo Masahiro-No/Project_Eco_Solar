@@ -26,8 +26,8 @@ class StationDashboardResponse(BaseModel):
     target_capacity_kw: float
     current_ghi_w_m2: float
     forecast_curve_3h: list[float]
-    cloud_trend: str
-    confidence: float
+    cloud_trend: str  # cloud impact level: low, medium, high, unknown
+    cloud_coverage_now_pct: Optional[float] = None
     estimated_power_kw: float
     delta_p_kw: float
     alert_level: str

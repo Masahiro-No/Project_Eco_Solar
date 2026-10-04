@@ -6,28 +6,52 @@ geostationary projection formula (latlon_to_pixel).
 
 Prepares past 12 consecutive 10-minute satellite frames (2 hours lookback)
 into normalized [0.0, 1.0] grayscale tensor with shape (1, 12, 1, 64, 64).
+
+Missing-data policy (no synthetic frames, no repeated frames):
+  1. Use the newest window of 12 consecutive real frames.
+  2. If a frame inside it is missing, shift the window back in time, at most
+     SATELLITE_MAX_SHIFT_MIN minutes from the newest published frame (time shift).
+  3. If no complete window exists, report status "missing": the caller then gives the
+     satellite branch a weight of 0 and uses the LSTM alone.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import io
 import logging
 import math
 import os
 from typing import Optional, Tuple
+import urllib.error
+import urllib.request
 
 import numpy as np
 from PIL import Image
 
 logger = logging.getLogger("satellite_preprocessor")
 
-FULL_DIM = 1100
+FULL_DIM = 1100  # level-2d full disk; one pixel is ~15 km (E-W) x ~11 km (N-S) over Thailand
+SEQ_LEN = 12
+FRAME_STEP = timedelta(minutes=10)
+CACHE_BUCKET = "satellite-cache"
 
-# Canonical coordinates for known stations in Thailand
-STATION_COORDINATES = {
-    "ST-001": (7.0086, 100.4988),  # PSU Hat Yai Solar Farm
-    "ST-002": (6.9310, 100.3690),  # ศูนย์บริการวิชาการที่ 10 (จ.สงขลา) พพ.
-    "ST-003": (14.7710, 98.6290),  # สถานีอุตุนิยมวิทยาทองผาภูมิ
-}
+# NICT publishes a frame roughly 20-30 minutes after the scan, so the newest frame is always a bit behind
+MAX_FEED_AGE_MIN = int(os.environ.get("SATELLITE_MAX_FEED_AGE_MIN", "60"))
+MAX_SHIFT_MIN = int(os.environ.get("SATELLITE_MAX_SHIFT_MIN", "30"))
+FETCH_TIMEOUT_S = float(os.environ.get("SATELLITE_FETCH_TIMEOUT_S", "8"))
+MAX_NETWORK_ERRORS = 2  # give up early when NICT is unreachable instead of timing out on every frame
+
+_TILE_CACHE: dict[datetime, np.ndarray] = {}  # full B03 tile per scan time, shared by all stations
+_TILE_CACHE_MAX = 36
+
+
+@dataclass
+class SatelliteWindow:
+    frames: Optional[np.ndarray]     # (1, 12, 1, 64, 64) in [0, 1], or None
+    end_time: Optional[datetime]     # scan time of the last frame
+    status: str                      # ok | shifted | missing
+    shift_minutes: int = 0           # how far the window was moved back from the newest published frame
+    reason: Optional[str] = None
 
 
 def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = FULL_DIM) -> Tuple[int, int]:
@@ -65,59 +89,68 @@ def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = FULL_D
     return int(round(col)), int(round(row))
 
 
+def _fetch_b03_tile(utc_dt: datetime) -> tuple[str, Optional[np.ndarray]]:
+    """Download the Band 03 tile of one scan. Returns ("ok", tile) | ("not_found", None) | ("error", None)."""
+    if utc_dt in _TILE_CACHE:
+        return "ok", _TILE_CACHE[utc_dt]
+
+    url = (
+        "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03/2d/550/"
+        f"{utc_dt:%Y}/{utc_dt:%m}/{utc_dt:%d}/{utc_dt:%H%M%S}_0_0.png"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
+            content = resp.read()
+        arr = np.array(Image.open(io.BytesIO(content)))
+        # B03 tile may have 2 channels (grayscale + alpha) or 3 channels (RGB)
+        band = arr[:, :, 1] if (arr.ndim == 3 and arr.shape[2] >= 2) else arr
+        if band.ndim == 3:
+            band = band[:, :, 0]
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # not published (yet)
+            return "not_found", None
+        logger.warning(f"[Satellite Preprocessor] NICT answered HTTP {e.code} for {url}")
+        return "error", None
+    except Exception as e:
+        logger.warning(f"[Satellite Preprocessor] Failed to fetch B03 from {url}: {e}")
+        return "error", None
+
+    if len(_TILE_CACHE) >= _TILE_CACHE_MAX:
+        for old in sorted(_TILE_CACHE)[: len(_TILE_CACHE) - _TILE_CACHE_MAX + 1]:
+            del _TILE_CACHE[old]
+    _TILE_CACHE[utc_dt] = band
+    return "ok", band
+
+
+def _crop(tile: np.ndarray, lat: float, lon: float, crop_size: int = 64) -> Optional[np.ndarray]:
+    col, row = latlon_to_pixel(lat, lon)
+    half = crop_size // 2
+    crop = tile[row - half : row + half, col - half : col + half]
+    if crop.shape != (crop_size, crop_size):  # station too close to the tile border
+        return None
+    return crop.astype(np.float32) / 255.0
+
+
 def fetch_b03_crop(utc_dt: datetime, lat: float, lon: float, crop_size: int = 64) -> Optional[np.ndarray]:
     """Fetch Himawari Band 03 (0.64µm visible reflectance) and crop 64x64 centered at (lat, lon).
 
     Returns:
         np.ndarray of shape (64, 64) with float32 values normalized in [0.0, 1.0], or None on error.
     """
-    import urllib.request
-
-    yyyy = utc_dt.strftime("%Y")
-    mm = utc_dt.strftime("%m")
-    dd = utc_dt.strftime("%d")
-    hhmmss = utc_dt.strftime("%H%M%S")
-    url = f"https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03/2d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            content = resp.read()
-
-        img = Image.open(io.BytesIO(content))
-        arr = np.array(img)
-        # B03 tile may have 2 channels (grayscale + alpha) or 3 channels (RGB)
-        band_data = arr[:, :, 1] if (arr.ndim == 3 and arr.shape[2] >= 2) else arr
-        if band_data.ndim == 3:
-            band_data = band_data[:, :, 0]
-
-        col, row = latlon_to_pixel(lat, lon)
-        half = crop_size // 2
-        crop = band_data[row - half : row + half, col - half : col + half]
-
-        if crop.shape != (crop_size, crop_size):
-            # Safe border clamp
-            crop = np.array(Image.fromarray(crop).resize((crop_size, crop_size), Image.Resampling.BILINEAR))
-
-        return crop.astype(np.float32) / 255.0
-    except Exception as e:
-        logger.warning(f"[Satellite Preprocessor] Failed to fetch B03 from {url}: {e}")
-        return None
+    status, tile = _fetch_b03_tile(utc_dt)
+    return _crop(tile, lat, lon, crop_size) if status == "ok" else None
 
 
 def fetch_rgb_crop(utc_dt: datetime, lat: float, lon: float, crop_size: int = 64) -> Optional[Image.Image]:
     """Fetch Himawari true-color composite (D531106) and crop 64x64 centered at (lat, lon)."""
-    import urllib.request
-
-    yyyy = utc_dt.strftime("%Y")
-    mm = utc_dt.strftime("%m")
-    dd = utc_dt.strftime("%d")
-    hhmmss = utc_dt.strftime("%H%M%S")
-    url = f"https://himawari8-dl.nict.go.jp/himawari8/img/D531106/2d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
-
+    url = (
+        "https://himawari8-dl.nict.go.jp/himawari8/img/D531106/2d/550/"
+        f"{utc_dt:%Y}/{utc_dt:%m}/{utc_dt:%d}/{utc_dt:%H%M%S}_0_0.png"
+    )
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
             content = resp.read()
         tile = Image.open(io.BytesIO(content))
         col, row = latlon_to_pixel(lat, lon)
@@ -137,165 +170,161 @@ def load_and_preprocess_single_frame(image_bytes: bytes, target_size: Tuple[int,
     return np.clip(arr, 0.0, 1.0)
 
 
-def generate_synthetic_satellite_sequence() -> np.ndarray:
-    """Generate realistic synthetic 12-frame sequence when no satellite imagery is available."""
-    base = np.random.uniform(0.08, 0.18, size=(64, 64)).astype(np.float32)
-    frames = []
-    for step in range(12):
-        noise = np.random.normal(0.0, 0.015, size=(64, 64)).astype(np.float32)
-        frame = np.clip(base + (step * 0.003) + noise, 0.0, 1.0)
-        frames.append(frame)
-
-    seq = np.stack(frames, axis=0)       # (12, 64, 64)
-    seq = np.expand_dims(seq, axis=1)    # (12, 1, 64, 64)
-    seq = np.expand_dims(seq, axis=0)    # (1, 12, 1, 64, 64)
-    return seq
+def frame_object_name(station_id: str, ts: datetime) -> str:
+    return f"{station_id}/b03_{ts:%Y%m%d_%H%M%S}.png"
 
 
-def get_satellite_sequence_12(
-    station_id: str = "ST-001",
-    minio_client: Optional[object] = None,
-    lat: Optional[float] = None,
-    lon: Optional[float] = None,
-    target_dt_utc: Optional[datetime] = None,
-) -> np.ndarray:
-    """Fetch the latest 12 consecutive 10-min satellite frames cropped centered on station coords.
+def connect_minio() -> Optional[object]:
+    """MinIO client for the frame cache, or None when MinIO is not reachable (frames then come straight from NICT)."""
+    try:
+        import urllib3
+        from minio import Minio
 
-    Strategy:
-    1. Resolve (lat, lon) coordinates for station.
-    2. Check MinIO cache for pre-cropped station frames.
-    3. If cache is incomplete, fetch real high-res B03 crops directly from NICT Japan.
-    4. Store fetched frames in MinIO for high-speed subsequent lookups.
-    5. Fallback gracefully to synthetic baseline if completely offline.
-
-    Returns:
-        np.ndarray of shape (1, 12, 1, 64, 64) in range [0.0, 1.0], dtype float32.
-    """
-    if lat is None or lon is None:
-        coords = STATION_COORDINATES.get(station_id, (7.0086, 100.4988))
-        lat, lon = coords[0], coords[1]
-
-    # Initialize MinIO client if needed
-    if minio_client is None:
-        try:
-            import urllib3
-            from minio import Minio
-            endpoints = [os.environ.get("MINIO_ENDPOINT"), "minio:9000", "localhost:9000"]
-            endpoints = [e for e in endpoints if e]
-            http_client = urllib3.PoolManager(
-                timeout=urllib3.Timeout(connect=0.8, read=1.5),
-                retries=urllib3.Retry(total=1, connect=1, read=1),
-            )
-            for ep in endpoints:
-                try:
-                    candidate = Minio(
-                        ep,
-                        access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
-                        secret_key=os.environ.get("MINIO_SECRET_KEY", "password"),
-                        secure=False,
-                        http_client=http_client,
-                    )
-                    candidate.bucket_exists("satellite-cache")
-                    minio_client = candidate
-                    break
-                except Exception:
-                    continue
-        except Exception:
-            minio_client = None
-
-    # Step 1: Check MinIO satellite-cache bucket for pre-existing station crops
-    bucket = "satellite-cache"
-    frames = []
-    if minio_client is not None:
-        try:
-            if minio_client.bucket_exists(bucket):
-                prefix = f"{station_id}/"
-                objects = [
-                    o for o in minio_client.list_objects(bucket, prefix=prefix, recursive=True)
-                    if o.object_name.endswith(".png") and "b03" in o.object_name
-                ]
-                if len(objects) >= 12 and target_dt_utc is None:
-                    objects.sort(key=lambda x: x.object_name)
-                    target_objs = objects[-12:]
-                    for obj in target_objs:
-                        resp = minio_client.get_object(bucket, obj.object_name)
-                        img_bytes = resp.read()
-                        resp.close()
-                        resp.release_conn()
-                        frames.append(load_and_preprocess_single_frame(img_bytes))
-
-                    if len(frames) == 12:
-                        seq = np.stack(frames, axis=0)[np.newaxis, :, np.newaxis, :, :]
-                        logger.info(f"[Satellite Preprocessor] Loaded 12 cropped frames from MinIO for station '{station_id}'")
-                        return seq
-        except Exception as e:
-            logger.warning(f"[Satellite Preprocessor] MinIO check error: {e}")
-
-    # Step 2: Live / historical fetch from NICT Japan using teammate's geocoded crop method
-    now_utc = target_dt_utc if target_dt_utc is not None else datetime.now(timezone.utc)
-    # Align to 10-minute mark (Himawari-8/9 updates at :00, :10, :20, :30, :40, :50)
-    minute_aligned = (now_utc.minute // 10) * 10
-    ref_dt = now_utc.replace(minute=minute_aligned, second=0, microsecond=0)
-
-    # 12 consecutive 10-minute timestamps ending at ref_dt
-    timestamps_12 = [ref_dt - timedelta(minutes=10 * (11 - i)) for i in range(12)]
-    logger.info(f"[Satellite Preprocessor] Fetching 12 B03 cropped frames for station '{station_id}' ({lat}, {lon}) ending at {ref_dt} UTC...")
-
-    online_frames = []
-    for idx, ts in enumerate(timestamps_12):
-        crop = fetch_b03_crop(ts, lat, lon, crop_size=64)
-        if crop is not None:
-            online_frames.append((ts, crop))
-            # Cache to MinIO if connected
-            if minio_client is not None:
-                try:
-                    if not minio_client.bucket_exists(bucket):
-                        minio_client.make_bucket(bucket)
-                    fn = f"b03_{ts.strftime('%Y%m%d_%H%M%S')}.png"
-                    obj_name = f"{station_id}/{fn}"
-                    img_pil = Image.fromarray((crop * 255.0).astype(np.uint8))
-                    buf = io.BytesIO()
-                    img_pil.save(buf, format="PNG")
-                    buf.seek(0)
-                    minio_client.put_object(
-                        bucket,
-                        obj_name,
-                        buf,
-                        length=buf.getbuffer().nbytes,
-                        content_type="image/png",
-                    )
-                except Exception:
-                    pass
-
-    if len(online_frames) >= 6:
-        # If we got at least 6 frames, interpolate / backfill to 12
-        frames_list = [f[1] for f in online_frames]
-        if len(frames_list) < 12:
-            deficit = 12 - len(frames_list)
-            frames_list = [frames_list[0]] * deficit + frames_list
-        seq = np.stack(frames_list, axis=0)[np.newaxis, :, np.newaxis, :, :]
-        logger.info(f"[Satellite Preprocessor] Real B03 geocoded sequence assembled: shape {seq.shape}, mean CI={float(np.mean(seq)):.3f}")
-
-        # Also attempt to cache latest RGB crop for visual display
-        if minio_client is not None:
+        http_client = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=0.8, read=1.5),
+            retries=urllib3.Retry(total=1, connect=1, read=1),
+        )
+        for ep in [e for e in (os.environ.get("MINIO_ENDPOINT"), "minio:9000", "localhost:9000") if e]:
             try:
-                rgb_crop = fetch_rgb_crop(timestamps_12[-1], lat, lon, crop_size=64)
-                if rgb_crop is not None:
-                    buf_rgb = io.BytesIO()
-                    rgb_crop.save(buf_rgb, format="PNG")
-                    buf_rgb.seek(0)
-                    minio_client.put_object(
-                        bucket,
-                        f"{station_id}_latest.png",
-                        buf_rgb,
-                        length=buf_rgb.getbuffer().nbytes,
-                        content_type="image/png",
-                    )
+                client = Minio(
+                    ep,
+                    access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
+                    secret_key=os.environ.get("MINIO_SECRET_KEY", "password"),
+                    secure=False,
+                    http_client=http_client,
+                )
+                if not client.bucket_exists(CACHE_BUCKET):
+                    client.make_bucket(CACHE_BUCKET)
+                return client
             except Exception:
-                pass
+                continue
+    except Exception:
+        pass
+    return None
 
-        return seq
 
-    # Step 3: Graceful synthetic baseline if NICT network is unreachable
-    logger.warning(f"[Satellite Preprocessor] Could not fetch real NICT frames. Using synthetic baseline for '{station_id}'.")
-    return generate_synthetic_satellite_sequence()
+class _FrameSource:
+    """Real frames of one station: MinIO cache first, then NICT (and the result is cached)."""
+
+    def __init__(self, station_id: str, lat: float, lon: float, minio_client: Optional[object]):
+        self.station_id, self.lat, self.lon, self.minio = station_id, lat, lon, minio_client
+        self._seen: dict[datetime, Optional[np.ndarray]] = {}
+        self.network_errors = 0
+
+    def get(self, ts: datetime) -> Optional[np.ndarray]:
+        if ts in self._seen:
+            return self._seen[ts]
+        frame = self._from_cache(ts)
+        if frame is None and self.network_errors < MAX_NETWORK_ERRORS:
+            status, tile = _fetch_b03_tile(ts)
+            if status == "ok":
+                frame = _crop(tile, self.lat, self.lon)
+                if frame is not None:
+                    self._to_cache(ts, frame)
+            elif status == "error":
+                self.network_errors += 1
+        self._seen[ts] = frame
+        return frame
+
+    def _from_cache(self, ts: datetime) -> Optional[np.ndarray]:
+        if self.minio is None:
+            return None
+        try:
+            resp = self.minio.get_object(CACHE_BUCKET, frame_object_name(self.station_id, ts))
+            try:
+                return load_and_preprocess_single_frame(resp.read())
+            finally:
+                resp.close()
+                resp.release_conn()
+        except Exception:
+            return None
+
+    def _to_cache(self, ts: datetime, frame: np.ndarray) -> None:
+        if self.minio is None:
+            return
+        try:
+            buf = io.BytesIO()
+            Image.fromarray((frame * 255.0).astype(np.uint8)).save(buf, format="PNG")
+            buf.seek(0)
+            self.minio.put_object(
+                CACHE_BUCKET, frame_object_name(self.station_id, ts), buf,
+                length=buf.getbuffer().nbytes, content_type="image/png",
+            )
+        except Exception as e:
+            logger.warning(f"[Satellite Preprocessor] Could not cache frame {ts:%H:%M} of '{self.station_id}': {e}")
+
+
+def floor_10min(dt: datetime) -> datetime:
+    dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    return dt.replace(minute=(dt.minute // 10) * 10, second=0, microsecond=0)
+
+
+def load_satellite_window(
+    station_id: str,
+    lat: float,
+    lon: float,
+    origin_utc: datetime,
+    minio_client: Optional[object] = None,
+) -> SatelliteWindow:
+    """Newest window of 12 consecutive real frames ending at or before `origin_utc`.
+
+    Returns frames with shape (1, 12, 1, 64, 64) and the scan time of the last frame, or status
+    "missing" with the reason. Never fabricates or repeats frames.
+    """
+    if minio_client is None:
+        minio_client = connect_minio()
+    source = _FrameSource(station_id, lat, lon, minio_client)
+
+    newest_end = floor_10min(origin_utc)
+    oldest_end = newest_end - timedelta(minutes=MAX_FEED_AGE_MIN)
+    newest_published: Optional[datetime] = None
+
+    end = newest_end
+    while end >= oldest_end:
+        last = source.get(end)
+        if last is not None:
+            if newest_published is None:
+                newest_published = end
+            shift = int((newest_published - end).total_seconds() // 60)
+            if shift > MAX_SHIFT_MIN:
+                break
+            frames = [source.get(end - FRAME_STEP * (SEQ_LEN - 1 - i)) for i in range(SEQ_LEN)]
+            if all(f is not None for f in frames):
+                seq = np.stack(frames, axis=0)[np.newaxis, :, np.newaxis, :, :].astype(np.float32)
+                _cache_latest_rgb(station_id, lat, lon, end, minio_client)
+                logger.info(
+                    f"[Satellite Preprocessor] '{station_id}': 12 real frames ending {end:%H:%M} UTC"
+                    f" (shift {shift} min, {int((newest_end - end).total_seconds() // 60)} min behind the forecast origin)"
+                )
+                return SatelliteWindow(seq, end, "shifted" if shift else "ok", shift)
+        if source.network_errors >= MAX_NETWORK_ERRORS and minio_client is None:
+            break
+        end -= FRAME_STEP
+
+    if source.network_errors >= MAX_NETWORK_ERRORS:
+        reason = "nict_unreachable"
+    elif newest_published is None:
+        reason = f"no_frame_published_in_last_{MAX_FEED_AGE_MIN}_min"
+    else:
+        reason = f"no_complete_window_within_{MAX_SHIFT_MIN}_min_shift"
+    logger.warning(f"[Satellite Preprocessor] '{station_id}': no usable satellite window ({reason})")
+    return SatelliteWindow(None, None, "missing", 0, reason)
+
+
+def _cache_latest_rgb(station_id: str, lat: float, lon: float, ts: datetime, minio_client: Optional[object]) -> None:
+    """Keep the newest true-colour crop for display on the dashboard."""
+    if minio_client is None:
+        return
+    try:
+        rgb = fetch_rgb_crop(ts, lat, lon, crop_size=64)
+        if rgb is None:
+            return
+        buf = io.BytesIO()
+        rgb.save(buf, format="PNG")
+        buf.seek(0)
+        minio_client.put_object(
+            CACHE_BUCKET, f"{station_id}_latest.png", buf,
+            length=buf.getbuffer().nbytes, content_type="image/png",
+        )
+    except Exception:
+        pass

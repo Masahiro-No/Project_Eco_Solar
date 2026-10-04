@@ -283,6 +283,14 @@ services:
       LOG_DIR: /workspace/logs
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "inference-worker"
+      # --- LSTM + satellite blend: w(t) = BLEND_W0 * exp(-t / BLEND_TAU_MIN), t in minutes ---
+      BLEND_W0: "0.9"
+      BLEND_TAU_MIN: "102"
+      # --- cloud coverage in the AOI around the station ---
+      CLOUD_AOI_SIZE_PX: "5"
+      CLOUD_REFLECTANCE_THRESHOLD: "0.25"
+      # --- missing satellite frames: shift the 12-frame window back at most this far ---
+      SATELLITE_MAX_SHIFT_MIN: "30"
     depends_on:
       redis:
         condition: service_healthy
@@ -331,6 +339,8 @@ services:
       - ./logs:/workspace/logs
       - ./backend:/workspace/backend
       - ./service:/workspace/service
+      # read-only: lookback_steps of the deployed LSTM (model_meta.json) decides how much history to send
+      - ./model:/workspace/model:ro
     logging:
       driver: "json-file"
       options:

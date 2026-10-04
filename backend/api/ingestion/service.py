@@ -278,30 +278,6 @@ class IngestionService:
         res = await db.execute(stmt)
         records = res.scalars().all()
 
-        if not records:
-            # Fallback mock baseline for last 24h if fresh database
-            now = datetime.now(timezone.utc)
-            mock_items = []
-            for i in range(24, 0, -1):
-                t = now - timedelta(hours=i)
-                ghi_val = max(0.0, 700.0 * (1.0 if 7 <= t.hour <= 17 else 0.0))
-                solar = SolarCalculator.get_solar_metrics(7.0086, 100.4988, t, ghi_val)
-                mock_items.append(
-                    WeatherRecentItem(
-                        timestamp=t,
-                        temperature=28.5,
-                        relative_humidity=75.0,
-                        ghi=ghi_val,
-                        dni=max(0.0, 500.0 * (1.0 if 7 <= t.hour <= 17 else 0.0)),
-                        clearsky_ghi=solar.clearsky_ghi,
-                        clearsky_index=solar.clearsky_index,
-                        solar_zenith_angle=solar.zenith_degrees,
-                        cloud_cover=20.0,
-                        source="baseline",
-                    )
-                )
-            return mock_items
-
         return [WeatherRecentItem.model_validate(r) for r in records]
 
     @staticmethod
@@ -316,17 +292,6 @@ class IngestionService:
         )
         res = await db.execute(stmt)
         frames = res.scalars().all()
-
-        if not frames:
-            now = datetime.now(timezone.utc)
-            return [
-                SatelliteFrameItem(
-                    frame_no=i + 1,
-                    timestamp=now - timedelta(minutes=10 * (12 - i)),
-                    image_url=f"/api/storage/download/satellite-cache/{station_id}/frame_{i+1:02d}.png",
-                )
-                for i in range(12)
-            ]
 
         # Return ordered from oldest to newest (1 to count)
         frames_reversed = list(reversed(frames))
@@ -350,14 +315,21 @@ class IngestionService:
         f_res = await db.execute(frame_count_stmt)
         f_count = f_res.scalar_one() or 0
 
-        latest_stmt = select(WeatherHistory.timestamp).order_by(WeatherHistory.timestamp.desc()).limit(1)
-        l_res = await db.execute(latest_stmt)
-        last_sync = l_res.scalar_one_or_none()
+        last_sync = (await db.execute(select(func.max(WeatherHistory.timestamp)))).scalar_one_or_none()
+        last_frame = (await db.execute(select(func.max(SatelliteFrameMetadata.frame_timestamp)))).scalar_one_or_none()
+
+        def feed_status(newest: Optional[datetime], max_age_min: int) -> str:
+            # derived from the age of the newest stored record, not assumed
+            if newest is None:
+                return "no_data"
+            newest = newest if newest.tzinfo else newest.replace(tzinfo=timezone.utc)
+            age_min = (datetime.now(timezone.utc) - newest).total_seconds() / 60.0
+            return "operational" if age_min <= max_age_min else "stale"
 
         return IngestionStatusResponse(
-            last_sync=last_sync or datetime.now(timezone.utc),
-            open_meteo_status="operational",
-            nict_status="operational",
+            last_sync=last_sync,
+            open_meteo_status=feed_status(last_sync, 30),
+            nict_status=feed_status(last_frame, 60),
             total_weather_records=w_count,
             total_satellite_frames=f_count,
         )

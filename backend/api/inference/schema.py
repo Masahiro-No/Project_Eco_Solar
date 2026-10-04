@@ -21,18 +21,24 @@ class PredictionResultData(BaseModel):
     station_name: str
     predicted_at: datetime
     forecast_horizon_hours: int = 3
-    ghi_forecast_curve: list[float] = Field(..., description="18 points of final GHI (W/m^2) every 10 mins modulated with ConvLSTM cloud index")
-    ghi_forecast_lstm_raw: Optional[list[float]] = Field(None, description="18 points of raw GHI from Time-Series LSTM before cloud modulation")
-    cloud_indices: Optional[list[float]] = Field(None, description="18 points of Cloud Index (0.0 - 1.0) extracted from Center ROI by ConvLSTM")
-    estimated_power_kw: float
+    ghi_forecast_curve: list[float] = Field(..., description="Final GHI (W/m^2) per 10-minute step: LSTM blended with the satellite cloud forecast")
+    ghi_forecast_lstm_raw: Optional[list[float]] = Field(None, description="GHI from the time-series LSTM before blending, same steps")
+    blend_weight: Optional[list[float]] = Field(None, description="Weight of the satellite branch per step (0 = LSTM only)")
+    cloud_coverage_pct: Optional[list[Optional[float]]] = Field(None, description="Forecast cloud cover (%) in the AOI per step; null where no satellite forecast covers the step")
+    cloud_coverage_now_pct: Optional[float] = Field(None, description="Cloud cover (%) in the AOI on the newest real satellite frame")
+    cloud_impact_level: Optional[str] = Field(None, description="low | medium | high; null when there is no satellite information")
+    satellite_status: Optional[str] = Field(None, description="ok | shifted | missing | night | model_unavailable")
+    satellite_lag_minutes: Optional[int] = Field(None, description="Age of the newest satellite frame relative to the forecast origin")
+    is_night: Optional[bool] = None
+    estimated_power_kw: float = Field(..., description="P_gen at the first forecast step, from the blended GHI")
     target_power_kw: float
-    delta_p_kw: float
-    cloud_trend: str  # Clear, Inward, Outward, Overcast
-    confidence: float
-    alert_level: str  # Normal, Early Warning, Critical Alert, Recovery
+    delta_p_kw: float = Field(..., description="Largest shortfall against the target in the horizon (0 if the target is met)")
+    reserve_kw: Optional[float] = Field(None, description="Recommended reserve: shortfall plus the forecast-uncertainty buffer")
+    cloud_trend: str = Field(..., description="Same as cloud_impact_level ('unknown' when null); kept for older clients")
+    alert_level: str  # night, normal, watch, warning, critical
     recommendation_text: str
-    bess_advisory: Optional[str] = Field(None, description="Specific BESS battery storage advisory derived from cloud motion")
     satellite_image_url: Optional[str] = None
+    model_version: Optional[str] = None
     data_time: Optional[datetime] = Field(None, description="Timestamp of the newest weather observation used as model input")
 
 

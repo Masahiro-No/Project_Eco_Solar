@@ -1,25 +1,24 @@
 """Inference Worker — Solar Power Forecasting & Decision Support System
 
-Flow:
-  1. Receive station_id, target_power_kw, model_version from Redis Queue (inference_queue).
-  2. Attempt to load trained LSTM / ConvLSTM from MLflow Model Registry (cached in ARQ ctx).
-  3. If model not yet registered (pre-training stage), use realistic Sun Elevation Physics simulation.
-  4. Evaluate Rule-based Decision Engine:
-     P_gen = (Area * Efficiency * GHI) / 1000
-     Delta_P = Target_Power - P_gen
-     Cross-referenced with Cloud Motion (Clear, Inward, Outward, Overcast).
-  5. Return forecast horizon (3h at 30-min intervals) + decision support advisory.
-  6. Record OpenTelemetry traces & Prometheus metrics.
+Flow of one job (queue: inference_queue):
+  1. LSTM (ONNX) forecasts GHI for the next 18 steps of 10 minutes from the real weather window.
+  2. The newest 12 real Himawari Band 03 frames around the station go through the ConvLSTM (ONNX),
+     which predicts the next 18 frames; the cloud fraction in the AOI is measured on each frame.
+  3. Both are blended with a weight that favours the satellite at short lead times (ghi_blend.py).
+  4. The decision rules run on the blended GHI (decision.py).
+  5. OpenTelemetry traces and metrics are recorded.
+
+Nothing is simulated: if the LSTM or its input is unavailable the job fails, and if the satellite
+branch is unavailable its weight is 0 and the result says so in `satellite_status`.
 """
 
+import json
 import logging
-import math
 import os
-import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -31,6 +30,14 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+from service.workers import decision
+from service.workers.cloud_coverage import MIN_COS_ZENITH, aoi_cloud_fraction
+from service.workers.ghi_blend import BLEND_TAU_MIN, BLEND_W0, blend_ghi
+from service.workers.satellite_preprocessor import load_satellite_window
+from service.workers.solar_geometry import NIGHT_CLEARSKY_GHI, clearsky_ghi_at, cos_zenith_at
+
+STEP_MINUTES = 10
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/app/logs"))
@@ -67,6 +74,10 @@ solar_inference_duration_histogram = meter.create_histogram(
     "solar_inference_duration_seconds",
     description="Duration of solar inference execution in seconds",
     unit="s",
+)
+solar_satellite_status_counter = meter.create_counter(
+    "solar_satellite_status_total",
+    description="Inference runs by state of the satellite branch (ok, shifted, missing, night, model_unavailable)",
 )
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -175,40 +186,29 @@ def _sync_best_model_from_minio(target_dir: Path) -> bool:
 
 
 def _load_trained_solar_onnx():
+    """Load the deployed LSTM: sync from MinIO when it has a newer version, then read the project
+    'model/time-series/' directory. Returns (session, feature_scaler, target_scaler, meta).
+
+    Raises RuntimeError when the model cannot be loaded: there is no simulated substitute.
     """
-    Hybrid model loader:
-    1. Check MinIO: if accessible and has a newer version, sync to project 'model/time-series/'.
-    2. Load model & scalers directly from project 'model/time-series/'.
-       Allows teammates to run inference completely offline without MinIO!
-    3. Return (session, feature_scaler, target_scaler).
-    """
-    try:
-        import joblib
-        import onnxruntime as ort
+    import joblib
+    import onnxruntime as ort
 
-        model_dir = _get_local_model_dir()
+    model_dir = _get_local_model_dir()
+    _sync_best_model_from_minio(model_dir)
 
-        # Step 1: Check and sync with MinIO if reachable
-        _sync_best_model_from_minio(model_dir)
+    names = ("solar_ghi_lstm.onnx", "feature_scaler.joblib", "target_scaler.joblib", "model_meta.json")
+    files = {n: model_dir / n for n in names}
+    missing = [n for n, f in files.items() if not f.exists()]
+    if missing:
+        raise RuntimeError(f"lstm_model_unavailable: missing {missing} in '{model_dir}'")
 
-        # Step 2: Load directly from project directory
-        onnx_file = model_dir / "solar_ghi_lstm.onnx"
-        fs_file = model_dir / "feature_scaler.joblib"
-        ts_file = model_dir / "target_scaler.joblib"
-
-        if not (onnx_file.exists() and fs_file.exists() and ts_file.exists()):
-            print(f"[Model Warning] Model files not found in '{model_dir}'")
-            return None, None, None
-
-        session = ort.InferenceSession(str(onnx_file))
-        feature_scaler = joblib.load(str(fs_file))
-        target_scaler = joblib.load(str(ts_file))
-
-        print(f"[Model Loader] Successfully loaded Solar GHI LSTM from project '{model_dir}'")
-        return session, feature_scaler, target_scaler
-    except Exception as e:
-        print(f"[Model Loader Error] Failed to load local project model: {e}")
-        return None, None, None
+    session = ort.InferenceSession(str(files["solar_ghi_lstm.onnx"]))
+    feature_scaler = joblib.load(str(files["feature_scaler.joblib"]))
+    target_scaler = joblib.load(str(files["target_scaler.joblib"]))
+    with open(files["model_meta.json"], "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    return session, feature_scaler, target_scaler, meta
 
 
 def _get_convlstm_model_dir() -> Path:
@@ -301,174 +301,105 @@ def _load_trained_convlstm_onnx():
         return None
 
 
-def _run_convlstm_nowcasting(session, sat_sequence_12: Any, roi_size: int = 5) -> tuple[Any, list[float]]:
-    """Execute ConvLSTM inference on 12-frame satellite sequence and extract 18-step Cloud Index (CI).
+def _run_lstm(session, feat_scaler, tgt_scaler, features: Any, meta: dict) -> list[float]:
+    """Run the LSTM on the real weather window and return GHI in W/m2 for each forecast step."""
+    lookback = int(meta["lookback_steps"])
+    n_features = len(meta["input_features"])
+    arr = np.asarray(features, dtype=np.float32) if features is not None else None
+    if arr is None or arr.shape != (lookback, n_features):
+        got = None if arr is None else arr.shape
+        raise ValueError(f"invalid_weather_features: expected ({lookback}, {n_features}), got {got}")
 
-    Returns:
-        tuple of (frames_18: np.ndarray of shape (18, 64, 64), ci_array: list of 18 floats in [0.0, 1.0])
-    """
-    import numpy as np
-
-    input_name = session.get_inputs()[0].name
-    out = session.run(None, {input_name: sat_sequence_12})[0]
-    frames_18 = out[0, :, 0, :, :]
-
-    cy, cx = frames_18.shape[1] // 2, frames_18.shape[2] // 2
-    r = roi_size // 2
-    roi = frames_18[:, cy - r : cy + r + 1, cx - r : cx + r + 1]
-    ci_values = np.clip(np.mean(roi, axis=(1, 2)), 0.0, 1.0)
-    ci_list = [round(float(x), 3) for x in ci_values]
-    return frames_18, ci_list
-
-
-def _classify_cloud_motion_and_advisory(ci_array: list[float], frames_18: Any) -> tuple[str, float, str]:
-    """Classify cloud dynamics into Clear, Inward, Outward, Overcast and provide specific BESS advisory."""
-    import numpy as np
-
-    ci_mean = float(np.mean(ci_array))
-    ci_delta = float(ci_array[-1] - ci_array[0])
-    ci_first_half = float(np.mean(ci_array[:9]))
-    ci_second_half = float(np.mean(ci_array[9:]))
-
-    if ci_mean < 0.20:
-        trend = "Clear"
-        advisory = "คงการชาร์จแบตเตอรี่ปกติ ไม่จำเป็นต้องสำรองไฟฉุกเฉิน (Clear Sky, high irradiance steady)"
-    elif ci_mean > 0.70:
-        trend = "Overcast"
-        advisory = "เตรียมจ่ายไฟจาก BESS เสริมความเสถียร แดดตกต่ำต่อเนื่องยาวนาน 3 ชม. (Persistent overcast cloud layer)"
-    elif ci_delta > 0.15 or (ci_second_half - ci_first_half > 0.12):
-        trend = "Inward"
-        advisory = "แจ้งเตือนแดดดรอปเฉียบพลัน! สั่งเตรียมปล่อยกำลังไฟ BESS Ramp-up รองรับ (Dense cloud front moving in)"
-    elif ci_delta < -0.10 or (ci_first_half - ci_second_half > 0.10):
-        trend = "Outward"
-        advisory = "กลุ่มเมฆกำลังพ้นสถานี แดดจะฟื้นตัวกลับมา เตรียมลดการจ่ายไฟ BESS (Cloud cover clearing out)"
-    else:
-        if ci_mean < 0.40:
-            trend = "Clear"
-            advisory = "คงการชาร์จแบตเตอรี่ปกติ แดดส่องสม่ำเสมอเป็นส่วนใหญ่ (Scattered light clouds)"
-        else:
-            trend = "Overcast"
-            advisory = "เตรียมจ่ายไฟจาก BESS เสริมความเสถียร รองรับความผันผวนของเมฆ (Moderate cloud shading)"
-
-    variance = float(np.var(ci_array))
-    confidence = round(float(np.clip(0.95 - (variance * 0.4), 0.82, 0.97)), 2)
-
-    return trend, confidence, advisory
-
-
-def _is_valid_feature_matrix(input_features: Optional[Any]) -> bool:
-    """True when the caller supplied a real (144, 16) weather feature window."""
-    if input_features is None:
-        return False
-    try:
-        import numpy as np
-        return np.array(input_features, dtype=np.float32).shape == (144, 16)
-    except Exception:
-        return False
-
-
-def _run_onnx_inference(session, feat_scaler, tgt_scaler, input_features: Optional[Any] = None) -> list[float]:
-    """Execute ONNX inference on a 144-step sequence and return 18 unscaled GHI predictions."""
-    import numpy as np
-
-    seq_144 = None
-    if input_features is not None:
-        try:
-            arr = np.array(input_features, dtype=np.float32)
-            if arr.shape == (144, 16):
-                seq_144 = arr
-        except Exception:
-            seq_144 = None
-
-    if seq_144 is None:
-        # Baseline nominal sequence (144 steps, 16 features) for realistic daytime inference
-        seq_144 = np.zeros((144, 16), dtype=np.float32)
-        seq_144[:, 0] = 550.0   # GHI
-        seq_144[:, 1] = 620.0   # DNI
-        seq_144[:, 2] = 160.0   # DHI
-        seq_144[:, 3] = 700.0   # Clearsky GHI
-        seq_144[:, 4] = 40.0    # Zenith
-        seq_144[:, 5] = 0.85    # clearsky_ratio
-        seq_144[:, 6] = 31.0    # Temp
-        seq_144[:, 7] = 68.0    # Humidity
-        seq_144[:, 8] = 1011.0  # Pressure
-        seq_144[:, 9] = 2.8     # Wind Speed
-
-    scaled_seq = feat_scaler.transform(seq_144).astype(np.float32)
-    scaled_batch = np.expand_dims(scaled_seq, axis=0)  # (1, 144, 16)
-    ort_inputs = {session.get_inputs()[0].name: scaled_batch}
-    raw_pred = session.run(None, ort_inputs)[0]        # (1, 18)
+    scaled = feat_scaler.transform(arr).astype(np.float32)[np.newaxis, :, :]
+    raw_pred = session.run(None, {session.get_inputs()[0].name: scaled})[0]
     unscaled = tgt_scaler.inverse_transform(raw_pred.reshape(-1, 1)).flatten()
-    return [round(float(max(0.0, val)), 2) for val in unscaled]
+    return [round(float(max(0.0, v)), 2) for v in unscaled]
 
 
-def simulate_realistic_ghi_curve(current_dt: datetime) -> list[float]:
-    """Generate 18 points of GHI (every 10 mins for 3 hours) based on sun elevation."""
-    base_hour = current_dt.hour + (current_dt.minute / 60.0)
-    curve = []
-    for i in range(18):
-        step_hour = base_hour + (i * (10.0 / 60.0))
-        # Sunlight window roughly 6:00 to 18:30 in Thailand
-        if 6.0 <= step_hour <= 18.5:
-            fraction = (step_hour - 6.0) / (18.5 - 6.0)
-            solar_peak = math.sin(fraction * math.pi) * 850.0
-            ghi_val = max(50.0, solar_peak * random.uniform(0.85, 1.05))
-        else:
-            ghi_val = 0.0
-        curve.append(round(ghi_val, 2))
-    return curve
+def _forecast_origin(data_time: Any) -> datetime:
+    """10-minute slot of the newest weather observation; forecast step i is origin + (i + 1) * 10 min."""
+    if data_time is None:
+        raise ValueError("missing_data_time: the job must say which observation time the features end at")
+    dt = data_time if isinstance(data_time, datetime) else datetime.fromisoformat(str(data_time).replace("Z", "+00:00"))
+    dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    half = timedelta(minutes=STEP_MINUTES / 2)
+    epoch = int((dt + half).timestamp() // (STEP_MINUTES * 60)) * STEP_MINUTES * 60
+    return datetime.fromtimestamp(epoch, tz=timezone.utc)
 
 
+def _no_satellite(n_steps: int, reason: str) -> dict[str, Any]:
+    return {
+        "status": "missing", "reason": reason, "end_time": None, "lag_minutes": None, "shift_minutes": 0,
+        "cloud_now": None, "cloud": [None] * n_steps, "lead_min": [None] * n_steps,
+    }
 
-def _evaluate_rule_based_advisory(
-    panel_area: float,
-    efficiency: float,
-    forecast_ghi: float,
-    target_power_kw: float,
-    cloud_trend: str,
-) -> tuple[float, float, str, str]:
-    """Calculate P_gen = (A * eta * GHI)/1000 and Delta_P = Target - P_gen, with decision logic."""
-    estimated_power_kw = round((panel_area * efficiency * forecast_ghi) / 1000.0, 2)
-    delta_p = round(target_power_kw - estimated_power_kw, 2)
 
-    # 4-case decision support matrix
-    if delta_p > 0:  # Deficit: Generation < Target
-        if cloud_trend in ("Inward", "Overcast"):
-            alert_level = "CRITICAL"
-            recommendation = (
-                f"Deficit of {delta_p} kW detected with cloud cover advancing ({cloud_trend}). "
-                f"Immediately dispatch fast-start spinning reserve +{delta_p} kW to prevent grid drop."
-            )
-        else:
-            alert_level = "WARNING"
-            recommendation = (
-                f"Deficit of {delta_p} kW detected under {cloud_trend} sky. "
-                f"Schedule battery energy storage discharge (BESS) or dispatch reserve +{delta_p} kW."
-            )
-    else:  # Surplus: Generation >= Target
-        surplus = abs(delta_p)
-        if cloud_trend in ("Clear", "Outward"):
-            alert_level = "NORMAL"
-            recommendation = (
-                f"Optimal generation with {surplus} kW surplus ({cloud_trend} sky). "
-                f"Direct excess power to BESS battery charging or electrolyzer storage."
-            )
-        else:
-            alert_level = "CAUTION"
-            recommendation = (
-                f"Surplus of {surplus} kW currently, but cloud trend is {cloud_trend}. "
-                f"Prepare ramp-down buffer in anticipation of irradiance drop."
-            )
+def _satellite_branch(
+    station_id: str, lat: float, lon: float, origin: datetime, n_steps: int, logger: logging.Logger
+) -> dict[str, Any]:
+    """Cloud fraction per forecast step from real frames + ConvLSTM, aligned to the forecast origin.
 
-    return estimated_power_kw, delta_p, alert_level, recommendation
+    The newest satellite frame is usually 20-30 minutes older than the weather data, so ConvLSTM
+    frame j (sat_end + (j + 1) * 10 min) maps to forecast step i = j - lag_steps. Steps without a
+    predicted frame keep None and get a satellite weight of 0.
+    """
+    window = load_satellite_window(station_id, lat, lon, origin)
+    out = _no_satellite(n_steps, window.reason)
+    if window.frames is None:
+        return out
+
+    out["end_time"] = window.end_time
+    out["shift_minutes"] = window.shift_minutes
+    out["lag_minutes"] = int((origin - window.end_time).total_seconds() // 60)
+    cos_end = cos_zenith_at(lat, lon, window.end_time)
+    if cos_end < MIN_COS_ZENITH:
+        # Band 03 is visible light: frames taken with the sun down or very low do not show the clouds
+        out["status"] = "night" if cos_end <= 0.015 else "low_sun"
+        out["reason"] = "sun_too_low_at_last_frame"
+        return out
+
+    session = _load_trained_convlstm_onnx()
+    if session is None:
+        out["status"], out["reason"] = "model_unavailable", "convlstm_model_not_loaded"
+        return out
+
+    predicted = session.run(None, {session.get_inputs()[0].name: window.frames})[0]
+    frame_times = [window.end_time + timedelta(minutes=STEP_MINUTES * (j + 1)) for j in range(predicted.shape[1])]
+    fractions = aoi_cloud_fraction(predicted, cos_zenith=[cos_zenith_at(lat, lon, t) for t in frame_times])
+    out["cloud_now"] = aoi_cloud_fraction(window.frames[0, -1, 0], cos_zenith=[cos_end])[0]
+
+    lag_steps = out["lag_minutes"] // STEP_MINUTES
+    for i in range(n_steps):
+        j = i + lag_steps
+        if 0 <= j < len(fractions) and fractions[j] is not None:
+            out["cloud"][i] = fractions[j]
+            out["lead_min"][i] = float((j + 1) * STEP_MINUTES)
+    out["status"] = window.status
+    known = [f for f in fractions if f is not None]
+    logger.info(
+        f"[Satellite] frames end {window.end_time:%H:%M} UTC, lag {out['lag_minutes']} min, "
+        f"shift {window.shift_minutes} min; cloud now {out['cloud_now'] * 100:.0f}%, "
+        f"forecast {min(known) * 100:.0f}-{max(known) * 100:.0f}% on {len(known)} frames"
+    )
+    return out
+
+
+def _require(kwargs: dict, name: str) -> Any:
+    value = kwargs.get(name)
+    if value is None:
+        raise ValueError(f"missing_{name}: the job must be enqueued with the station's real {name}")
+    return value
+
+
+def _pct(fraction: Any) -> Any:
+    return None if fraction is None else round(fraction * 100.0, 1)
 
 
 async def run_inference(
     ctx: dict,
-    station_id: str = "ST-001",
-    target_power_kw: float = 5000.0,
+    station_id: str,
+    target_power_kw: float,
     model_version: str = "latest",
-    *args,
     **kwargs,
 ) -> dict[str, Any]:
     """ARQ Worker Function — Run Solar GHI & Power Forecast Inference.
@@ -477,156 +408,105 @@ async def run_inference(
         ctx: ARQ context (job_id, redis, etc.)
         station_id: ID of the solar station (e.g. ST-001)
         target_power_kw: Dispatch power obligation target
-        model_version: Registered MLflow model version
+        model_version: Requested model version (the deployed one is used and reported)
+        kwargs: weather_features, data_time, station_lat, station_lon, panel_area, efficiency (all required)
     """
     job_id: str = ctx.get("job_id", f"infer-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
     logger = setup_logger(job_id)
     start_time = time.time()
 
-    # Fallback if first positional arg was a text string (legacy test calls)
-    if isinstance(station_id, str) and not station_id.startswith("ST-") and len(station_id) > 10:
-        actual_station_id = "ST-001"
-    else:
-        actual_station_id = station_id
-
     with tracer.start_as_current_span(
         "solar_forecast.inference",
-        attributes={
-            "job.id": job_id,
-            "station.id": actual_station_id,
-            "model.version": model_version,
-            "target.kw": target_power_kw,
-        },
+        attributes={"job.id": job_id, "station.id": station_id, "target.kw": target_power_kw},
     ) as span:
-        logger.info("=" * 60)
-        logger.info(f"[Job] Solar Forecast Inference Started: job_id={job_id}")
-        logger.info(f"[Job] Station ID: {actual_station_id}, Target: {target_power_kw} kW, Model Version: {model_version}")
-        logger.info("=" * 60)
-
-        # ── 1. Simulate or Load Model Forecast (Time-Series LSTM) ───────
-        now = datetime.now(timezone.utc)
-        onnx_session, feat_scaler, tgt_scaler = _load_trained_solar_onnx()
-        # Provenance flags: lets consumers tell a real model run from a degraded/simulated one
-        input_source = "weather_features" if _is_valid_feature_matrix(kwargs.get("weather_features")) else "nominal"
-        lstm_source = "simulated"
-        cloud_source = "fallback"
-        if onnx_session is not None and feat_scaler is not None and tgt_scaler is not None:
-            logger.info("[Model] Successfully loaded ONNX SolarLSTMForecaster from project 'model/time-series/' (solar_ghi_lstm.onnx)")
-            raw_ghi_curve = _run_onnx_inference(onnx_session, feat_scaler, tgt_scaler, kwargs.get("weather_features"))
-            lstm_source = "onnx"
-            logger.info(f"[Model LSTM] Produced 18-step Raw GHI forecast: min={min(raw_ghi_curve):.1f}, max={max(raw_ghi_curve):.1f} W/m2")
-        else:
-            logger.info("[Model] Using simulated astronomical elevation baseline (18 steps)")
-            raw_ghi_curve = simulate_realistic_ghi_curve(now)
-
-        # ── 2. Run ConvLSTM Satellite Nowcasting & GHI Cloud Modulation ──
-        try:
-            from service.workers.satellite_preprocessor import get_satellite_sequence_12, STATION_COORDINATES
-            from service.workers.cloud_index_extractor import (
-                classify_bess_motion_state,
-                extract_center_roi_cloud_indices,
-                extract_optical_flow_dynamics,
-                modulate_lstm_ghi,
-            )
-
-            st_lat = kwargs.get("station_lat")
-            st_lon = kwargs.get("station_lon")
-            if st_lat is None or st_lon is None:
-                coords = STATION_COORDINATES.get(actual_station_id, (7.0086, 100.4988))
-                st_lat, st_lon = coords[0], coords[1]
-
-            target_dt_param = kwargs.get("target_dt")
-            sat_input = get_satellite_sequence_12(
-                station_id=actual_station_id,
-                lat=st_lat,
-                lon=st_lon,
-                target_dt_utc=target_dt_param,
-            )
-            conv_session = _load_trained_convlstm_onnx()
-
-            if conv_session is not None:
-                logger.info(f"[Model ConvLSTM] Running Seq2Seq ConvLSTM Nowcasting for '{actual_station_id}' ({st_lat}, {st_lon})...")
-                frames_18, ci_array = _run_convlstm_nowcasting(conv_session, sat_input)
-                cloud_source = "convlstm"
-
-                # Cloud Tracking & Meteorological DSS
-                flow_stats = extract_optical_flow_dynamics(frames_18)
-                dss_meta = classify_bess_motion_state(ci_array, flow_stats)
-                cloud_trend = dss_meta["state"]
-                confidence = dss_meta["confidence"]
-                bess_advisory = f"{dss_meta['bess_action']} (Speed: {flow_stats['speed_kmh']} km/h, State: {dss_meta['state_th']})"
-
-                # Modulate GHI using formula: GHI_final(t) = GHI_lstm(t) * (1.0 - CI_t)
-                ghi_curve = [
-                    round(float(v), 1)
-                    for v in modulate_lstm_ghi(raw_ghi_curve, ci_array)
-                ]
-                logger.info(f"[Model ConvLSTM] Extracted 18-step Cloud Index (CI): min={min(ci_array):.3f}, max={max(ci_array):.3f}, mean={float(np.mean(ci_array)):.3f}")
-                logger.info(f"[Model Fusion] Modulated GHI curve: min={min(ghi_curve):.1f}, max={max(ghi_curve):.1f} W/m2")
-                logger.info(f"[Model Fusion] Meteorological State: {cloud_trend} ({dss_meta['state_th']}) | Wind/Cloud Speed: {flow_stats['speed_kmh']} km/h")
-            else:
-                logger.warning("[Model ConvLSTM] ConvLSTM not available. Falling back to unmodulated GHI curve.")
-                ci_array = [0.0] * 18
-                ghi_curve = raw_ghi_curve
-                cloud_trend = "Clear"
-                confidence = 0.85
-                bess_advisory = "คงการชาร์จแบตเตอรี่ปกติ ไม่จำเป็นต้องสำรองไฟฉุกเฉิน (Baseline mode)"
-        except Exception as e:
-            logger.warning(f"[Model ConvLSTM Error] Nowcasting error ({e}). Using unmodulated GHI.")
-            ci_array = [0.0] * 18
-            ghi_curve = raw_ghi_curve
-            cloud_trend = "Clear"
-            confidence = 0.85
-            bess_advisory = "คงการชาร์จแบตเตอรี่ปกติ (Fallback mode)"
-
-        avg_forecast_ghi = sum(ghi_curve) / len(ghi_curve) if ghi_curve else 500.0
-
-        panel_area = float(kwargs.get("panel_area") or (20000.0 if actual_station_id == "ST-002" else 30000.0))
-        efficiency = float(kwargs.get("efficiency") or 0.185)
-
-        est_kw, delta_p, alert, rec = _evaluate_rule_based_advisory(
-            panel_area=panel_area,
-            efficiency=efficiency,
-            forecast_ghi=avg_forecast_ghi,
-            target_power_kw=target_power_kw,
-            cloud_trend=cloud_trend,
+        lat = float(_require(kwargs, "station_lat"))
+        lon = float(_require(kwargs, "station_lon"))
+        panel_area = float(_require(kwargs, "panel_area"))
+        efficiency = float(_require(kwargs, "efficiency"))
+        origin = _forecast_origin(kwargs.get("data_time"))
+        logger.info(
+            f"[Job] {job_id}: station {station_id}, target {target_power_kw} kW, "
+            f"forecast origin {origin:%Y-%m-%d %H:%M} UTC"
         )
 
-        logger.info(f"[Inference Result] Avg GHI: {avg_forecast_ghi:.1f} W/m2, P_gen: {est_kw} kW, Delta_P: {delta_p} kW")
-        logger.info(f"[Decision Advisory] Alert: {alert} | Trend: {cloud_trend} | BESS: {bess_advisory}")
+        # ── 1. Time-series LSTM on the real weather window ──────────────
+        session, feat_scaler, tgt_scaler, meta = _load_trained_solar_onnx()
+        ghi_lstm = _run_lstm(session, feat_scaler, tgt_scaler, kwargs.get("weather_features"), meta)
+        n_steps = len(ghi_lstm)
+        step_times = [origin + timedelta(minutes=STEP_MINUTES * (i + 1)) for i in range(n_steps)]
+        clearsky = [round(clearsky_ghi_at(lat, lon, t), 2) for t in step_times]
+        logger.info(
+            f"[Model LSTM] v{meta.get('version')} lookback {meta.get('lookback_steps')}: "
+            f"GHI {min(ghi_lstm):.1f}-{max(ghi_lstm):.1f} W/m2"
+        )
+
+        # ── 2. Satellite branch: real frames -> ConvLSTM -> cloud fraction in the AOI ──
+        try:
+            sat = _satellite_branch(station_id, lat, lon, origin, n_steps, logger)
+        except Exception as e:  # the LSTM forecast is still real: continue without the satellite
+            logger.warning(f"[Satellite] branch failed ({e}); using the LSTM alone")
+            sat = _no_satellite(n_steps, f"error: {e}")
+
+        # ── 3. Blend and decide ──────────────────────────────────────────
+        ghi_blend, weights = blend_ghi(ghi_lstm, clearsky, sat["cloud"], sat["lead_min"])
+        ghi_blend = [round(v, 2) for v in ghi_blend]
+        # the night rule applies to the raw LSTM curve as well, so both lines agree after sunset
+        ghi_lstm = [0.0 if cs < NIGHT_CLEARSKY_GHI else v for v, cs in zip(ghi_lstm, clearsky)]
+        d = decision.evaluate(
+            ghi_blend, clearsky, panel_area, efficiency, target_power_kw,
+            cloud_fraction=sat["cloud"], cloud_fraction_now=sat["cloud_now"],
+            step_metrics=meta.get("step_metrics"), step_minutes=STEP_MINUTES,
+        )
+        if d.is_night and sat["status"] in ("ok", "shifted"):
+            sat["status"] = "night"
+        logger.info(
+            f"[Blend] w0={BLEND_W0} tau={BLEND_TAU_MIN} min; satellite {sat['status']}; "
+            f"GHI {min(ghi_blend):.1f}-{max(ghi_blend):.1f} W/m2"
+        )
+        logger.info(f"[Decision] {d.alert_level}: {d.recommendation_text}")
 
         result = {
             "job_id": job_id,
-            "station_id": actual_station_id,
-            "model_version": model_version,
-            "predicted_at": now.isoformat(),
-            "forecast_horizon_hours": 3,
-            "ghi_forecast_curve": ghi_curve,
-            "ghi_forecast_lstm_raw": raw_ghi_curve,
-            "cloud_indices": ci_array,
-            "estimated_power_kw": est_kw,
+            "station_id": station_id,
+            "model_version": str(meta.get("version", model_version)),
+            "predicted_at": datetime.now(timezone.utc).isoformat(),
+            "forecast_origin": origin.isoformat(),
+            "forecast_horizon_hours": n_steps * STEP_MINUTES // 60,
+            "ghi_forecast_curve": ghi_blend,
+            "ghi_forecast_lstm_raw": ghi_lstm,
+            "clearsky_ghi": clearsky,
+            "blend_weight": [round(w, 3) for w in weights],
+            "cloud_coverage_pct": [_pct(c) for c in sat["cloud"]],
+            "cloud_coverage_now_pct": _pct(sat["cloud_now"]),
+            "cloud_impact_level": d.cloud_impact_level,
+            "satellite_status": sat["status"],
+            "satellite_reason": sat["reason"],
+            "satellite_end_time": sat["end_time"].isoformat() if sat["end_time"] else None,
+            "satellite_lag_minutes": sat["lag_minutes"],
+            "is_night": d.is_night,
+            "estimated_power_kw": d.estimated_power_kw,
+            "power_forecast_kw": d.power_forecast_kw,
             "target_power_kw": target_power_kw,
-            "delta_p_kw": delta_p,
-            "cloud_trend": cloud_trend,
-            "confidence": confidence,
-            "alert_level": alert,
-            "recommendation_text": rec,
-            "bess_advisory": bess_advisory,
-            # provenance: onnx|simulated, weather_features|nominal, convlstm|fallback
-            "lstm_source": lstm_source,
-            "input_source": input_source,
-            "cloud_source": cloud_source,
+            "delta_p_kw": d.delta_p_kw,
+            "reserve_kw": d.reserve_kw,
+            "alert_level": d.alert_level,
+            "recommendation_text": d.recommendation_text,
+            # provenance: every value above comes from the deployed models and real inputs
+            "lstm_source": "onnx",
+            "input_source": "weather_features",
+            "cloud_source": "convlstm" if sat["status"] in ("ok", "shifted") else "none",
         }
 
-        # ── 2. OpenTelemetry & Prometheus Metrics ─────────────────────
         try:
             duration = time.time() - start_time
-            solar_inference_requests_counter.add(1, {"station_id": actual_station_id, "model_version": model_version})
-            solar_forecast_power_kw_histogram.record(est_kw, {"station_id": actual_station_id})
-            solar_inference_duration_histogram.record(duration, {"station_id": actual_station_id})
-            span.set_attribute("forecast.power_kw", est_kw)
-            span.set_attribute("forecast.delta_p_kw", delta_p)
-            span.set_attribute("forecast.alert_level", alert)
+            solar_inference_requests_counter.add(1, {"station_id": station_id, "model_version": result["model_version"]})
+            solar_forecast_power_kw_histogram.record(d.estimated_power_kw, {"station_id": station_id})
+            solar_inference_duration_histogram.record(duration, {"station_id": station_id})
+            solar_satellite_status_counter.add(1, {"station_id": station_id, "status": sat["status"]})
+            span.set_attribute("forecast.power_kw", d.estimated_power_kw)
+            span.set_attribute("forecast.delta_p_kw", d.delta_p_kw)
+            span.set_attribute("forecast.alert_level", d.alert_level)
+            span.set_attribute("satellite.status", sat["status"])
             _metric_reader.force_flush()
         except Exception as e:
             logger.warning(f"[Metrics Warning] Failed to flush metrics: {e}")

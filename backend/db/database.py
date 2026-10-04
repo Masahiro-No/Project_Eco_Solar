@@ -40,22 +40,35 @@ def _ensure_prediction_columns(sync_conn) -> None:
     inspector = inspect(sync_conn)
     if "predictions" not in inspector.get_table_names():
         return
-    existing = {c["name"] for c in inspector.get_columns("predictions")}
-    timestamp_type = "TIMESTAMP WITH TIME ZONE" if sync_conn.dialect.name == "postgresql" else "DATETIME"
-    if "source" not in existing:
-        sync_conn.execute(text("ALTER TABLE predictions ADD COLUMN source VARCHAR(20)"))
-    if "data_time" not in existing:
-        sync_conn.execute(text(f"ALTER TABLE predictions ADD COLUMN data_time {timestamp_type}"))
+    existing = {c["name"]: c for c in inspector.get_columns("predictions")}
+    postgres = sync_conn.dialect.name == "postgresql"
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if postgres else "DATETIME"
+    new_columns = {
+        "source": "VARCHAR(20)",
+        "data_time": timestamp_type,
+        "ghi_forecast_lstm_raw": "JSON",
+        "blend_weight": "JSON",
+        "reserve_kw": "FLOAT",
+        "cloud_coverage_pct": "JSON",
+        "cloud_coverage_now_pct": "FLOAT",
+        "satellite_status": "VARCHAR(30)",
+        "satellite_lag_minutes": "INTEGER",
+        "is_night": "BOOLEAN",
+        "model_version": "VARCHAR(30)",
+    }
+    for name, sql_type in new_columns.items():
+        if name not in existing:
+            sync_conn.execute(text(f"ALTER TABLE predictions ADD COLUMN {name} {sql_type}"))
+    # 'confidence' is no longer written (it was not a real model output)
+    if postgres and "confidence" in existing and not existing["confidence"].get("nullable", True):
+        sync_conn.execute(text("ALTER TABLE predictions ALTER COLUMN confidence DROP NOT NULL"))
 
 
 async def seed_default_stations() -> None:
-    """Seed initial reference stations, default operator user, and initial forecast if not present."""
-    from datetime import datetime, timezone
-    import uuid
+    """Seed the reference stations and the default operator user if not present."""
     from sqlalchemy import select
     from api.stations.model import Station
     from api.auth.model import User
-    from api.inference.model import Prediction
     from pwdlib import PasswordHash
 
     default_stations = [
@@ -135,86 +148,5 @@ async def seed_default_stations() -> None:
                 password_hash=pwd_context.hash("operator1234"),
             )
             session.add(user)
-
-        # 3. Seed Initial Predictions for all 5 stations if none exists
-        initial_predictions_data = [
-            {
-                "station_id": "ST-001",
-                "ghi_curve": [685.2, 742.0, 715.4, 620.1, 510.3, 380.0],
-                "pgen": 4087.0,
-                "target": 5000.0,
-                "delta_p": -913.0,
-                "cloud": "Inward",
-                "conf": 0.88,
-                "alert": "Early Warning",
-                "rec": "เมฆหนาทึบกำลังเคลื่อนตัวเข้าสู่สถานี ม.อ. หาดใหญ่ — แนะนำเตรียมจ่ายพลังงานสำรองจาก BESS ชดเชย 913 kW",
-            },
-            {
-                "station_id": "ST-002",
-                "ghi_curve": [775.0, 810.0, 790.0, 725.0, 580.0, 410.0],
-                "pgen": 3441.0,
-                "target": 4000.0,
-                "delta_p": -559.0,
-                "cloud": "Clear",
-                "conf": 0.94,
-                "alert": "Normal",
-                "rec": "สภาพอากาศปลอดโปร่งชายฝั่งสงขลา กำลังผลิตคงที่ ไม่มีสัญญาณก้อนเมฆบดบัง",
-            },
-            {
-                "station_id": "ST-003",
-                "ghi_curve": [718.0, 755.0, 730.0, 640.0, 490.0, 340.0],
-                "pgen": 2456.0,
-                "target": 3000.0,
-                "delta_p": -544.0,
-                "cloud": "Clear",
-                "conf": 0.91,
-                "alert": "Normal",
-                "rec": "การผลิตพลังงานแสงอาทิตย์นครศรีธรรมราชปกติ สอดคล้องตามแผนจ่ายไฟ",
-            },
-            {
-                "station_id": "ST-004",
-                "ghi_curve": [760.0, 785.0, 750.0, 680.0, 520.0, 360.0],
-                "pgen": 2052.0,
-                "target": 2500.0,
-                "delta_p": -448.0,
-                "cloud": "Outward",
-                "conf": 0.89,
-                "alert": "Normal",
-                "rec": "ก้อนเมฆกำลังเคลื่อนตัวออกจากพื้นที่ปัตตานี แนวโน้มรังสีอาทิตย์มีเสถียรภาพ",
-            },
-            {
-                "station_id": "ST-005",
-                "ghi_curve": [650.0, 680.0, 620.0, 510.0, 390.0, 270.0],
-                "pgen": 1984.0,
-                "target": 2750.0,
-                "delta_p": -766.0,
-                "cloud": "Inward",
-                "conf": 0.85,
-                "alert": "Normal",
-                "rec": "มีกลุ่มเมฆฝั่งอันดามันเคลื่อนตัวสู่ตรัง รังสีดวงอาทิตย์ลดลงเล็กน้อย อยู่ในเกณฑ์ปกติ",
-            },
-        ]
-
-        now_dt = datetime.now(timezone.utc)
-        for pdata in initial_predictions_data:
-            pred_stmt = select(Prediction).where(Prediction.station_id == pdata["station_id"]).limit(1)
-            existing_pred = (await session.execute(pred_stmt)).scalar_one_or_none()
-            if not existing_pred:
-                initial_pred = Prediction(
-                    job_id=str(uuid.uuid4()),
-                    station_id=pdata["station_id"],
-                    predicted_at=now_dt,
-                    forecast_horizon_hours=3,
-                    ghi_forecast_curve=pdata["ghi_curve"],
-                    estimated_power_kw=pdata["pgen"],
-                    target_power_kw=pdata["target"],
-                    delta_p_kw=pdata["delta_p"],
-                    cloud_trend=pdata["cloud"],
-                    confidence=pdata["conf"],
-                    alert_level=pdata["alert"],
-                    recommendation_text=pdata["rec"],
-                    satellite_frame_url=None,
-                )
-                session.add(initial_pred)
 
         await session.commit()
