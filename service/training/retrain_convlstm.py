@@ -18,9 +18,20 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
+try:
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    _TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    F = None
+    _TORCH_AVAILABLE = False
+    class _DummyModule:
+        def __init__(self, *args, **kwargs):
+            pass
+    nn = type("nn", (), {"Module": _DummyModule, "Conv2d": _DummyModule})()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("RetrainConvLSTM")

@@ -13,12 +13,6 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-
-from service.models.solar_lstm import SolarLSTMForecaster
 from service.training.dataset import ALIGNED_FEATURE_COLS, FORECAST_STEPS, LOOKBACK_STEPS
 
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +59,11 @@ def execute_timeseries_retrain(
         }
 
     # 2. Setup Device & Model
+    import numpy as np
+    import torch
+    import torch.nn as nn
+    from service.models.solar_lstm import SolarLSTMForecaster
+
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
