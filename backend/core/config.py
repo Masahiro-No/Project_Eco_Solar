@@ -1,4 +1,6 @@
 import os
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,5 +27,8 @@ class Settings(BaseSettings):
     enable_retrain: bool = False
     retrain_debounce_seconds: int = 300  # รอรวม label ที่ส่งใกล้กันก่อนเริ่ม retrain
     convlstm_retrain_threshold: int = 50
+    # admin account created at startup when a password is configured (ADMIN_PASSWORD in the root .env)
+    admin_email: str = "admin@solardss.io"
+    admin_password: Optional[str] = None
 
 settings = Settings()

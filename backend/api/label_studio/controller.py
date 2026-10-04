@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, status
 
 from core.config import settings
 from api.auth.model import User
-from api.auth.service import get_current_user
+from api.auth.service import require_admin
 from api.jobs.service import JobService
 from api.label_studio.schema import (
     AnnotationResponse,
@@ -91,7 +91,7 @@ CONFIG_TEMPLATES = {
 }
 
 async def list_projects(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> list[ProjectResponse]:
     svc = LabelStudioService()
     try:
@@ -103,7 +103,7 @@ async def list_projects(
 
 async def create_project(
     payload: CreateProjectRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> ProjectResponse:
     svc = LabelStudioService()
     
@@ -134,7 +134,7 @@ async def create_project(
 
 async def list_tasks(
     project_id: int,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> list[TaskResponse]:
     svc = LabelStudioService()
     try:
@@ -147,7 +147,7 @@ async def list_tasks(
 async def create_task(
     project_id: int,
     payload: ImportTaskRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> TaskResponse:
     svc = LabelStudioService()
     try:
@@ -160,7 +160,7 @@ async def create_task(
 async def list_annotations(
     _: int,
     task_id: int,
-    __: User = Depends(get_current_user),
+    __: User = Depends(require_admin),
 ) -> list[AnnotationResponse]:
     svc = LabelStudioService()
     try:
@@ -174,7 +174,7 @@ async def create_annotation(
     _: int,
     task_id: int,
     payload: CreateAnnotationRequest,
-    __: User = Depends(get_current_user),
+    __: User = Depends(require_admin),
 ) -> AnnotationResponse:
     svc = LabelStudioService()
     try:
@@ -186,7 +186,7 @@ async def create_annotation(
 
 async def submit_satellite_annotation(
     payload: SubmitSatelliteAnnotationRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> SubmitSatelliteAnnotationResponse:
     """Submit satellite cloud verification -> Label Studio -> Buffer check -> retrain trigger."""
     svc = LabelStudioService()

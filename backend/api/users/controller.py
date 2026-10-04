@@ -4,14 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.auth.model import User
 from api.auth.repository import AuthRepository
 from api.auth.schema import UserResponse
-from api.auth.service import EmailAlreadyExistsError, get_current_user
+from api.auth.service import ADMIN_ROLE, get_current_user, require_admin
 from api.users.schema import UpdateUserRequest
 from db.database import get_db_session
 
 
 async def get_all_users(
     session: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),  # requires auth
+    _: User = Depends(require_admin),  # requires auth
 ) -> list[UserResponse]:
     repo = AuthRepository(session)
     users = await repo.get_all_users()
@@ -21,8 +21,10 @@ async def get_all_users(
 async def get_user(
     user_id: int,
     session: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> UserResponse:
+    if current_user.id != user_id and current_user.role != ADMIN_ROLE:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view another user")
     repo = AuthRepository(session)
     user = await repo.get_user_by_id(user_id)
     if user is None:
@@ -36,8 +38,11 @@ async def update_user(
     session: AsyncSession = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> UserResponse:
-    if current_user.id != user_id:
+    is_admin = current_user.role == ADMIN_ROLE
+    if current_user.id != user_id and not is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot modify another user")
+    if payload.role is not None and not is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an admin can change a role")
 
     repo = AuthRepository(session)
     user = await repo.get_user_by_id(user_id)
@@ -55,6 +60,11 @@ async def update_user(
         hashed = ph.hash(payload.password)
         user = await repo.update_user_password(user, hashed)
 
+    if payload.role is not None and payload.role != user.role:
+        user.role = payload.role
+        await session.commit()
+        await session.refresh(user)
+
     return UserResponse.model_validate(user)
 
 
@@ -64,7 +74,7 @@ async def delete_user(
     session: AsyncSession = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    if current_user.id != user_id:
+    if current_user.id != user_id and current_user.role != ADMIN_ROLE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete another user")
 
     repo = AuthRepository(session)

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
-from api.auth.service import get_current_user
+from api.auth.service import require_admin
 from api.label_studio import file_import
 from api.label_studio.ground_truth import (
     GroundTruthStore,
@@ -78,7 +78,7 @@ def _batch_response(station_id: str, received: int, summary, rejected, enqueued,
 async def submit_ground_truth(
     payload: SubmitGroundTruthRequest,
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> SubmitGroundTruthResponse:
     """ส่ง GHI จริง 1 ค่า -> Label Studio (สร้าง/อัปเดต) -> นัด retrain."""
     await _require_station(db, payload.station_id)
@@ -102,7 +102,7 @@ async def submit_ground_truth(
 async def batch_submit_ground_truth(
     payload: BatchSubmitGroundTruthRequest,
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> BatchSubmitGroundTruthResponse:
     """ส่ง GHI จริงหลายค่า (จากตารางหน้าเว็บ)."""
     await _require_station(db, payload.station_id)
@@ -116,7 +116,7 @@ async def batch_submit_ground_truth(
 
 async def preview_ground_truth_file(
     file: UploadFile = File(...),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> UploadPreviewResponse:
     """อ่านหัวตาราง + ตัวอย่างแถวของไฟล์ และเดาคอลัมน์เวลา/GHI ให้ผู้ใช้เลือกยืนยัน."""
     content = await file.read()
@@ -133,7 +133,7 @@ async def upload_ground_truth_file(
     ghi_col: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> UploadGroundTruthResponse:
     """นำเข้า GHI จริงจากไฟล์ CSV/XLSX เฉพาะแถวที่อยู่ในวันที่เลือก (เวลาไทย) ตามคอลัมน์ที่ผู้ใช้ระบุ."""
     await _require_station(db, station_id)

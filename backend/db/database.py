@@ -30,6 +30,7 @@ async def create_database_schema() -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
         await connection.run_sync(_ensure_prediction_columns)
+        await connection.run_sync(_ensure_user_columns)
 
 
 def _ensure_prediction_columns(sync_conn) -> None:
@@ -62,6 +63,17 @@ def _ensure_prediction_columns(sync_conn) -> None:
     # 'confidence' is no longer written (it was not a real model output)
     if postgres and "confidence" in existing and not existing["confidence"].get("nullable", True):
         sync_conn.execute(text("ALTER TABLE predictions ALTER COLUMN confidence DROP NOT NULL"))
+
+
+def _ensure_user_columns(sync_conn) -> None:
+    """Add users.role to databases created before roles existed (existing accounts become operators)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if "users" not in inspector.get_table_names():
+        return
+    if "role" not in {c["name"] for c in inspector.get_columns("users")}:
+        sync_conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'operator'"))
 
 
 async def seed_default_stations() -> None:
@@ -148,5 +160,17 @@ async def seed_default_stations() -> None:
                 password_hash=pwd_context.hash("operator1234"),
             )
             session.add(user)
+
+        # 3. Admin account, only when a password is configured (never a built-in default)
+        if settings.admin_password:
+            admin = (await session.execute(select(User).where(User.email == settings.admin_email))).scalar_one_or_none()
+            if admin is None:
+                session.add(User(
+                    email=settings.admin_email,
+                    password_hash=pwd_context.hash(settings.admin_password),
+                    role="admin",
+                ))
+            elif admin.role != "admin":
+                admin.role = "admin"
 
         await session.commit()

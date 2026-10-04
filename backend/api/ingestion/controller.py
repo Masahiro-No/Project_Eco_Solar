@@ -2,7 +2,7 @@ from fastapi import Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
-from api.auth.service import get_current_user
+from api.auth.service import get_current_user, require_admin
 from api.ingestion.schema import (
     IngestTriggerRequest,
     IngestTriggerResponse,
@@ -17,7 +17,7 @@ from db.database import get_db_session
 async def trigger_ingestion(
     payload: IngestTriggerRequest,
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> IngestTriggerResponse:
     """สั่งดึงข้อมูลสภาพอากาศแบบ Real-time (Open-Meteo) และภาพดาวเทียม Himawari (NICT) เข้าสู่ระบบทันที"""
     return await IngestionService.trigger_ingest(station_id=payload.station_id or "ST-001", db=db)
@@ -54,7 +54,7 @@ async def get_ingestion_status(
 async def trigger_auto_catchup(
     payload: IngestTriggerRequest,
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> dict:
     """สั่งตรวจสอบ Gap ของข้อมูลและดึงข้อมูลย้อนหลังทั้ง Weather Time-Series และภาพถ่ายดาวเทียม 12 เฟรมอัตโนมัติ"""
     station_id = payload.station_id or "ST-001"

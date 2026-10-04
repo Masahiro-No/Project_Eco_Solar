@@ -229,7 +229,7 @@ async def check_http_flow():
             yield s
 
     app.dependency_overrides[get_db_session] = _db
-    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, role="admin")
     pool = FakePool()
     from api.jobs.service import JobService
 

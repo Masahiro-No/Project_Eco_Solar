@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
-from api.auth.service import get_current_user, get_optional_current_user
+from api.auth.service import get_current_user, require_admin
 from api.inference.schema import (
     InferenceRequest,
     InferenceResponse,
@@ -20,7 +20,7 @@ from db.database import get_db_session
 async def predict(
     payload: InferenceRequest,
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> InferenceResponse:
     """สั่งคำขอพยากรณ์ไฟฟ้าล่วงหน้า 3 ชม. (Enqueue to inference_queue)"""
     job_id = await InferenceService.enqueue_solar_inference(
@@ -49,7 +49,7 @@ async def get_result(
 async def get_latest_prediction(
     station_id: str,
     db: AsyncSession = Depends(get_db_session),
-    _: Optional[User] = Depends(get_optional_current_user),
+    _: User = Depends(get_current_user),
 ) -> PredictionResultData:
     """ดึงผลการพยากรณ์รอบล่าสุดของสถานีขึ้นแสดงบน Dashboard ทันที"""
     return await InferenceService.get_latest_prediction(station_id, db=db)
@@ -59,7 +59,7 @@ async def get_prediction_history(
     station_id: str,
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db_session),
-    _: Optional[User] = Depends(get_optional_current_user),
+    _: User = Depends(get_current_user),
 ) -> list[PredictionResultData]:
     """ดึงประวัติผลพยากรณ์ย้อนหลังเพื่อนำไปพลอตกราฟเปรียบเทียบ"""
     return await InferenceService.get_prediction_history(station_id, db=db, limit=limit)

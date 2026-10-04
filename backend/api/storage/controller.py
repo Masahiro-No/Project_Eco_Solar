@@ -2,13 +2,13 @@ from fastapi import Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from api.auth.model import User
-from api.auth.service import get_current_user
+from api.auth.service import require_admin
 from api.storage.schema import BucketResponse, CreateBucketRequest, UploadResponse, VersioningRequest
 from api.storage.service import StorageService
 
 
 async def list_buckets(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> list[BucketResponse]:
     svc = StorageService()
     buckets = svc.list_buckets()
@@ -25,7 +25,7 @@ async def list_buckets(
 
 async def create_bucket(
     payload: CreateBucketRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> dict:
     svc = StorageService()
     try:
@@ -38,7 +38,7 @@ async def create_bucket(
 async def upload_file(
     bucket_name: str = Form(...),
     file: UploadFile = File(...),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> UploadResponse:
     svc = StorageService()
     try:
@@ -62,7 +62,7 @@ async def upload_file(
 async def download_file(
     bucket_name: str,
     object_name: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ):
     svc = StorageService()
     try:
@@ -79,7 +79,7 @@ async def download_file(
 async def set_versioning(
     bucket_name: str,
     payload: VersioningRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> dict:
     svc = StorageService()
     try:

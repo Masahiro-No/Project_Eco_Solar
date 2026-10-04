@@ -1,6 +1,4 @@
 from datetime import UTC, datetime, timedelta
-from typing import Optional
-
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -35,7 +33,7 @@ class AuthService:
 
         expires_at = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
         return jwt.encode(
-            {"sub": str(user.id), "email": user.email, "exp": expires_at},
+            {"sub": str(user.id), "email": user.email, "role": user.role, "exp": expires_at},
             settings.jwt_secret_key,
             algorithm=settings.jwt_algorithm,
         )
@@ -72,23 +70,12 @@ async def get_current_user(
     return user
 
 
-optional_bearer_scheme = HTTPBearer(auto_error=False)
+ADMIN_ROLE = "admin"
+OPERATOR_ROLE = "operator"
 
 
-async def get_optional_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
-    session: AsyncSession = Depends(get_db_session),
-) -> Optional[User]:
-    """JWT dependency for public / optional endpoints."""
-    if not credentials:
-        return None
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-        user_id: int = int(payload["sub"])
-    except Exception:
-        return None
-
-    repo = AuthRepository(session)
-    return await repo.get_user_by_id(user_id)
-
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Dependency for the private (admin) zone: labeling, station management, jobs, storage, users."""
+    if user.role != ADMIN_ROLE:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    return user
