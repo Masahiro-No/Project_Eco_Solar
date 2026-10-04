@@ -193,10 +193,17 @@ services:
       LOG_DIR: /workspace/logs
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "trainer-worker"
+      # --- LSTM retrain (อ่าน weather_history/ground_truth_labels จาก Postgres) ---
+      DATABASE_URL: "postgresql+psycopg2://myuser:mypassword@postgres/mydatabase"
+      RETRAIN_LOOKBACK_DAYS: "45"
+      RETRAIN_MIN_LABELS: "6"
+      RETRAIN_MAX_REGRESSION_RATIO: "1.0"
     depends_on:
       redis:
         condition: service_healthy
       mlflow:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     volumes:
       - ./logs:/workspace/logs

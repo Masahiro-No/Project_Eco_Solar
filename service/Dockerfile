@@ -16,11 +16,14 @@ RUN pip install --no-cache-dir --default-timeout=120 --retries=5 \
     "accelerate>=0.29.0,<0.35" \
     "mlflow>=2.14.0,<2.15" \
     "boto3>=1.34.0,<1.35" \
-    "pandas>=2.2.0" \
+    "pandas>=2.2.0,<3.0" \
     "scikit-learn>=1.4.0" \
     "joblib>=1.3.0" \
     "onnx>=1.16.0" \
     "onnxruntime>=1.17.0" \
+    "sqlalchemy>=2.0,<3.0" \
+    "psycopg2-binary>=2.9" \
+    "redis>=5.0" \
     "opentelemetry-exporter-otlp-proto-grpc"
 
 COPY . /workspace/service/

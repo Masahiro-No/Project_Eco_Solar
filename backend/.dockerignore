@@ -1,0 +1,11 @@
+# ไม่ต้องส่งเข้า build context (Dockerfile ติดตั้ง dependency เองด้วย uv sync)
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+logs/
+# env ถูกส่งตอน runtime ผ่าน env_file / environment ใน compose.yml ไม่ต้องอบลง image
+.env
+.git/
