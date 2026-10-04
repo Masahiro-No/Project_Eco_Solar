@@ -264,6 +264,9 @@
     "station_click_hint": "คลิกเพื่อเลือกสถานีนี้",
     "no_data": "ไม่มีข้อมูล",
     "forecast_updated": "พยากรณ์ตั้งแต่ {time} · อัปเดตเมื่อ {minutes} นาทีที่แล้ว",
-    "forecast_stale": "ข้อมูลล่าช้า"
+    "forecast_stale": "ข้อมูลล่าช้า",
+    "station_location_label": "ตำแหน่งสถานี",
+    "map_pick_hint": "คลิกบนแผนที่หรือลากหมุดเพื่อเลือกตำแหน่งสถานี",
+    "use_my_location": "ใช้ตำแหน่งปัจจุบัน"
   }
 }

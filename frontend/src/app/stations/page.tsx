@@ -12,9 +12,16 @@ import {
   RefreshCwIcon,
   CompassIcon,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
 import { solarApi, StationCreateRequest, NearestStationResponse } from '@/services/api';
+
+// Leaflet touches `window`, so the map is only rendered in the browser
+const LocationPicker = dynamic(() => import('@/components/UI/LocationPicker'), {
+  ssr: false,
+  loading: () => <div className="h-[260px] w-full animate-pulse rounded-lg bg-slate-100" />,
+});
 
 export interface StationDashboardItem {
   id: string;
@@ -125,6 +132,12 @@ export default function StationsPage() {
   const totalArea = stationList.reduce((sum, s) => sum + s.panel_area, 0);
   const totalPgen = stationList.reduce((sum, s) => sum + s.pgen, 0);
   const onlineCount = stationList.filter((s) => s.is_active).length;
+
+  // Registered stations shown on the picker map for context
+  const existingPoints = React.useMemo(
+    () => stationList.map((s) => ({ lat: s.latitude, lng: s.longitude, name: `${s.id} · ${s.name}` })),
+    [stationList]
+  );
 
   // Handle Add Station via Backend API
   const handleCreateStation = async (e: React.FormEvent) => {
@@ -466,29 +479,23 @@ export default function StationsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[12.5px] font-medium text-slate-700">{t('latitude')}</label>
-                  <input
-                    type="number"
-                    step="0.0001"
-                    required
-                    value={newStation.latitude}
-                    onChange={(e) => setNewStation({ ...newStation, latitude: parseFloat(e.target.value) })}
-                    className="mt-1 h-9 w-full rounded-lg border border-line px-3 text-[13px] focus:border-brand focus:outline-none"
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-[12.5px] font-medium text-slate-700">{t('station_location_label')}</label>
+                  <span className="font-mono text-[12px] tabular-nums text-slate-600" aria-live="polite">
+                    {t('latitude')} {newStation.latitude.toFixed(5)} · {t('longitude')} {newStation.longitude.toFixed(5)}
+                  </span>
+                </div>
+                <div className="mt-1">
+                  <LocationPicker
+                    latitude={newStation.latitude}
+                    longitude={newStation.longitude}
+                    onChange={(lat: number, lng: number) => setNewStation((prev) => ({ ...prev, latitude: lat, longitude: lng }))}
+                    existing={existingPoints}
+                    myLocationLabel={t('use_my_location')}
                   />
                 </div>
-                <div>
-                  <label className="text-[12.5px] font-medium text-slate-700">{t('longitude')}</label>
-                  <input
-                    type="number"
-                    step="0.0001"
-                    required
-                    value={newStation.longitude}
-                    onChange={(e) => setNewStation({ ...newStation, longitude: parseFloat(e.target.value) })}
-                    className="mt-1 h-9 w-full rounded-lg border border-line px-3 text-[13px] focus:border-brand focus:outline-none"
-                  />
-                </div>
+                <p className="mt-1 text-[11.5px] text-muted">{t('map_pick_hint')}</p>
               </div>
 
               <div className="grid grid-cols-3 gap-3">

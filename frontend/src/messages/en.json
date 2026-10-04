@@ -264,6 +264,9 @@
     "station_click_hint": "Click to select this station",
     "no_data": "No data",
     "forecast_updated": "Forecast for {time} · updated {minutes} min ago",
-    "forecast_stale": "Data is delayed"
+    "forecast_stale": "Data is delayed",
+    "station_location_label": "Station location",
+    "map_pick_hint": "Click the map or drag the pin to set the station location.",
+    "use_my_location": "Use my location"
   }
 }

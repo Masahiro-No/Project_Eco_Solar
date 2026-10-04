@@ -13,3 +13,10 @@ body {
   color: var(--foreground);
   background: var(--background);
 }
+
+/* Tailwind preflight sets img { max-width: 100% }, which distorts Leaflet map tiles */
+.leaflet-container img,
+.leaflet-container .leaflet-tile {
+  max-width: none !important;
+  max-height: none !important;
+}

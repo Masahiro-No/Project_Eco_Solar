@@ -5,7 +5,12 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# --ignore-scripts: newer pnpm treats un-approved dependency build scripts as an error
+# (ERR_PNPM_IGNORED_BUILDS). None are needed here: Next.js ships its own SWC binary and
+# sharp/unrs-resolver/@parcel/watcher use prebuilt optional binaries. The cache mount keeps
+# re-builds from re-downloading every package.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --ignore-scripts
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
