@@ -83,6 +83,8 @@ export interface PredictionResultData {
   alert_level: string;
   recommendation_text: string;
   satellite_image_url?: string;
+  /** Timestamp of the newest weather observation the model was fed with */
+  data_time?: string | null;
 }
 
 export interface SatelliteFrameItem {

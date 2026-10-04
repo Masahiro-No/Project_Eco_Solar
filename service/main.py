@@ -41,11 +41,13 @@ class InferenceWorkerSettings:
 try:
     from service.workers.ingestion_worker import (
         ingest_single_station,
+        collect_inference_results,
         scheduled_ingest_pipeline,
         shutdown as ingestion_shutdown,
         startup as ingestion_startup,
     )
 except ImportError:
+    collect_inference_results = None
     ingest_single_station = None
     scheduled_ingest_pipeline = None
     ingestion_shutdown = None
@@ -56,10 +58,13 @@ if scheduled_ingest_pipeline is not None:
     class IngestionWorkerSettings:
         """Settings สำหรับ Ingestion Worker (ดึงภาพดาวเทียม & สภาพอากาศทุก 10 นาที)"""
         queue_name = "ingest_queue"
-        functions = [scheduled_ingest_pipeline, ingest_single_station]
+        functions = [scheduled_ingest_pipeline, ingest_single_station, collect_inference_results]
         cron_jobs = [
-            # Himawari satellite imagery updates every 10 minutes (:08, :18, :28, :38, :48, :58)
-            cron(scheduled_ingest_pipeline, minute={8, 18, 28, 38, 48, 58})
+            # Himawari satellite imagery updates every 10 minutes (:08, :18, :28, :38, :48, :58);
+            # the pipeline also enqueues the real-model inference for every station afterwards
+            cron(scheduled_ingest_pipeline, minute={8, 18, 28, 38, 48, 58}),
+            # Save finished inference results to the DB (every minute)
+            cron(collect_inference_results, minute=set(range(60)), timeout=60),
         ]
         redis_settings = RedisSettings(
             host=os.environ.get("REDIS_HOST", os.environ.get("redis_host", "localhost")),

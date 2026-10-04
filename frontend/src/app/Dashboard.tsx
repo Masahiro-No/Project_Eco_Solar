@@ -13,6 +13,7 @@ import { DecisionLog } from '../components/UI/DecisionLog';
 import { RecentAlerts } from '../components/UI/RecentAlerts';
 import { ServiceStatus } from '../components/UI/ServiceStatus';
 import { DataSourceBanner } from '../components/UI/DataSourceBanner';
+import { ForecastFreshness } from '../components/UI/ForecastFreshness';
 
 export function Dashboard() {
   const t = useTranslations('common');
@@ -25,6 +26,7 @@ export function Dashboard() {
           <h1 className="text-[22px] font-bold leading-tight text-[#0f1f4d]">{t('solar_forecast_title')}</h1>
           <p className="text-[13.5px] text-slate-600">{t('solar_forecast_desc')}</p>
         </div>
+        <ForecastFreshness />
       </div>
 
       <DataSourceBanner />

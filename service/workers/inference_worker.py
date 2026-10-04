@@ -356,6 +356,17 @@ def _classify_cloud_motion_and_advisory(ci_array: list[float], frames_18: Any) -
     return trend, confidence, advisory
 
 
+def _is_valid_feature_matrix(input_features: Optional[Any]) -> bool:
+    """True when the caller supplied a real (144, 16) weather feature window."""
+    if input_features is None:
+        return False
+    try:
+        import numpy as np
+        return np.array(input_features, dtype=np.float32).shape == (144, 16)
+    except Exception:
+        return False
+
+
 def _run_onnx_inference(session, feat_scaler, tgt_scaler, input_features: Optional[Any] = None) -> list[float]:
     """Execute ONNX inference on a 144-step sequence and return 18 unscaled GHI predictions."""
     import numpy as np
@@ -495,9 +506,14 @@ async def run_inference(
         # ── 1. Simulate or Load Model Forecast (Time-Series LSTM) ───────
         now = datetime.now(timezone.utc)
         onnx_session, feat_scaler, tgt_scaler = _load_trained_solar_onnx()
+        # Provenance flags: lets consumers tell a real model run from a degraded/simulated one
+        input_source = "weather_features" if _is_valid_feature_matrix(kwargs.get("weather_features")) else "nominal"
+        lstm_source = "simulated"
+        cloud_source = "fallback"
         if onnx_session is not None and feat_scaler is not None and tgt_scaler is not None:
             logger.info("[Model] Successfully loaded ONNX SolarLSTMForecaster from project 'model/time-series/' (solar_ghi_lstm.onnx)")
             raw_ghi_curve = _run_onnx_inference(onnx_session, feat_scaler, tgt_scaler, kwargs.get("weather_features"))
+            lstm_source = "onnx"
             logger.info(f"[Model LSTM] Produced 18-step Raw GHI forecast: min={min(raw_ghi_curve):.1f}, max={max(raw_ghi_curve):.1f} W/m2")
         else:
             logger.info("[Model] Using simulated astronomical elevation baseline (18 steps)")
@@ -531,6 +547,7 @@ async def run_inference(
             if conv_session is not None:
                 logger.info(f"[Model ConvLSTM] Running Seq2Seq ConvLSTM Nowcasting for '{actual_station_id}' ({st_lat}, {st_lon})...")
                 frames_18, ci_array = _run_convlstm_nowcasting(conv_session, sat_input)
+                cloud_source = "convlstm"
 
                 # Cloud Tracking & Meteorological DSS
                 flow_stats = extract_optical_flow_dynamics(frames_18)
@@ -595,6 +612,10 @@ async def run_inference(
             "alert_level": alert,
             "recommendation_text": rec,
             "bess_advisory": bess_advisory,
+            # provenance: onnx|simulated, weather_features|nominal, convlstm|fallback
+            "lstm_source": lstm_source,
+            "input_source": input_source,
+            "cloud_source": cloud_source,
         }
 
         # ── 2. OpenTelemetry & Prometheus Metrics ─────────────────────

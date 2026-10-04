@@ -33,4 +33,9 @@ class Prediction(Base):
     recommendation_text: Mapped[str] = mapped_column(Text, nullable=False)
     
     satellite_frame_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # 'model' = produced by the inference worker (real ONNX run). NULL = legacy/seeded placeholder row.
+    source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    # Timestamp of the newest weather observation the model was fed with
+    data_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

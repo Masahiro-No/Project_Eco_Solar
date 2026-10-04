@@ -9,6 +9,7 @@ import {
   TimeSeriesPredictionOutput,
 } from '@/services/timeSeriesModel';
 import { ghiData, powerData, stations as fallbackStations } from '@/data/dashboard';
+import { forecastTimeLabel } from '@/lib/time';
 
 export type GhiChartPoint = {
   t: string;
@@ -31,6 +32,8 @@ export type ForecastContextType = {
   isLocalModel: boolean;
   isLoading: boolean;
   error: string | null;
+  /** When the latest live prediction was produced (null if not live) */
+  lastUpdated: string | null;
   stations: StationResponse[];
   selectedStationId: string;
   selectedStation: StationResponse | null;
@@ -38,7 +41,7 @@ export type ForecastContextType = {
   prediction: PredictionResultData | null;
   localPrediction: TimeSeriesPredictionOutput | null;
   modelMeta: ModelMetadata;
-  refreshForecast: (stationId?: string) => Promise<void>;
+  refreshForecast: (stationId?: string, opts?: { silent?: boolean }) => Promise<void>;
   chartGhiData: GhiChartPoint[];
   chartPowerData: PowerChartPoint[];
 };
@@ -59,6 +62,7 @@ const ForecastContext = createContext<ForecastContextType>({
   isLocalModel: true,
   isLoading: false,
   error: null,
+  lastUpdated: null,
   stations: initialFallbackStations,
   selectedStationId: 'ST-001',
   selectedStation: initialFallbackStations[0],
@@ -107,6 +111,9 @@ function buildPowerChart(
 
 const offsetLabel = (i: number) => `+${(i + 1) * 10}m`;
 
+/** How often the dashboard re-reads the latest prediction (the backend produces one every 10 min). */
+const POLL_INTERVAL_MS = 60_000;
+
 export function ForecastProvider({ children }: { children: React.ReactNode }) {
   const [stations, setStations] = useState<StationResponse[]>(initialFallbackStations);
   const [selectedStationId, setSelectedStationId] = useState<string>('ST-001');
@@ -118,6 +125,8 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
 
   // Guards against out-of-order responses when the station changes quickly
   const requestSeq = useRef(0);
+  const predictionRef = useRef<PredictionResultData | null>(null);
+  predictionRef.current = prediction;
 
   useEffect(() => {
     let cancelled = false;
@@ -135,10 +144,11 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
   );
 
   const fetchForecast = useCallback(
-    async (stationId?: string) => {
+    async (stationId?: string, opts?: { silent?: boolean }) => {
+      const silent = !!opts?.silent;
       const targetId = stationId || selectedStationId || 'ST-001';
       const seq = ++requestSeq.current;
-      setIsLoading(true);
+      if (!silent) setIsLoading(true);
       setError(null);
 
       const st = stations.find((s) => s.id === targetId) || selectedStation;
@@ -155,6 +165,9 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
           setPrediction(data);
           setLocalPrediction(null);
           setIsLive(true);
+        } else if (silent && predictionRef.current) {
+          // Background refresh failed: keep showing the last real result (its age is shown to the user)
+          return;
         } else {
           setPrediction(null);
           setIsLive(false);
@@ -164,11 +177,12 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
         if (seq !== requestSeq.current) return;
         console.error('[ForecastProvider] forecast failed', err);
         setError('Unable to load forecast');
+        if (silent && predictionRef.current) return;
         setPrediction(null);
         setIsLive(false);
         setLocalPrediction(generateTimeSeriesPrediction(targetId, stationName, targetKw, panelArea, efficiency));
       } finally {
-        if (seq === requestSeq.current) setIsLoading(false);
+        if (seq === requestSeq.current && !silent) setIsLoading(false);
       }
     },
     [selectedStationId, stations, selectedStation]
@@ -179,9 +193,27 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStationId]);
 
+  // Auto-refresh: pick up each new 10-minute prediction without a page reload
+  const fetchRef = useRef(fetchForecast);
+  fetchRef.current = fetchForecast;
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') {
+        fetchRef.current(selectedStationId, { silent: true });
+      }
+    };
+    const id = setInterval(refresh, POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [selectedStationId]);
+
   const chartGhiData = useMemo<GhiChartPoint[]>(() => {
     if (isLive && prediction?.ghi_forecast_curve?.length) {
-      return buildGhiChart(prediction.ghi_forecast_curve, offsetLabel, (i, p) =>
+      const base = prediction.data_time || prediction.predicted_at;
+      return buildGhiChart(prediction.ghi_forecast_curve, (i) => forecastTimeLabel(base, i + 1), (i, p) =>
         i < 3 ? Math.round(p * 0.98) : undefined
       );
     }
@@ -205,7 +237,7 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
     if (isLive && prediction) {
       points = buildPowerChart(
         prediction.ghi_forecast_curve || [],
-        offsetLabel,
+        (i) => forecastTimeLabel(prediction.data_time || prediction.predicted_at, i + 1),
         prediction.target_power_kw || fallbackTarget,
         panelArea,
         efficiency
@@ -229,6 +261,7 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
       isLocalModel: !isLive,
       isLoading,
       error,
+      lastUpdated: isLive && prediction ? prediction.predicted_at : null,
       stations,
       selectedStationId,
       selectedStation,
