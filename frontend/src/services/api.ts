@@ -5,7 +5,7 @@
  * Falls back seamlessly to mock data when backend is not running.
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '@/lib/config';
 
 export function getAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
@@ -83,6 +83,8 @@ export interface PredictionResultData {
   alert_level: string;
   recommendation_text: string;
   satellite_image_url?: string;
+  /** Timestamp of the newest weather observation the model was fed with */
+  data_time?: string | null;
 }
 
 export interface SatelliteFrameItem {

@@ -29,6 +29,23 @@ async def create_database_schema() -> None:
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(_ensure_prediction_columns)
+
+
+def _ensure_prediction_columns(sync_conn) -> None:
+    """Lightweight migration: create_all() never ALTERs existing tables, so add the
+    nullable columns introduced for real-model predictions when they are missing."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    if "predictions" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("predictions")}
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if sync_conn.dialect.name == "postgresql" else "DATETIME"
+    if "source" not in existing:
+        sync_conn.execute(text("ALTER TABLE predictions ADD COLUMN source VARCHAR(20)"))
+    if "data_time" not in existing:
+        sync_conn.execute(text(f"ALTER TABLE predictions ADD COLUMN data_time {timestamp_type}"))
 
 
 async def seed_default_stations() -> None:

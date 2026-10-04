@@ -10,6 +10,9 @@ Flow:
   5. Backfill/heal any missing weather intervals (auto_catchup_weather).
   6. Query live weather (GHI, DHI, DNI, Clearsky, Temperature, etc.) from Open-Meteo.
   7. Record OpenTelemetry traces & Prometheus metrics.
+  8. Chain real-model inference: enqueue `run_inference` for every station whose input data is
+     fresh (skipped otherwise), then `collect_inference_results` (cron, every minute) saves the
+     finished results into the `predictions` table.
 """
 
 import io
@@ -37,6 +40,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from sqlalchemy import select
 
+from api.inference.service import InferenceService
 from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
 from api.ingestion.normalizer import WeatherDataNormalizer
 from api.ingestion.service import IngestionService, SATELLITE_BUCKET
@@ -243,6 +247,9 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
 
             await db.commit()
 
+            # D. Chain: run the real forecast model on the data that was just ingested
+            results["inference"] = await _trigger_inference(ctx, db, active_stations, dt_frame)
+
         duration = time.time() - start_time
         results["duration_seconds"] = round(duration, 2)
         runs_counter.add(1)
@@ -254,6 +261,44 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
 
         logger.info(f"Ingestion pipeline completed for all stations in {duration:.2f}s")
         return results
+
+
+async def _trigger_inference(ctx: dict, db, stations, dt_frame: Optional[datetime]) -> dict[str, Any]:
+    """Enqueue `run_inference` for each station. Stations with stale/insufficient data are skipped."""
+    summary: dict[str, Any] = {"queued": [], "skipped": {}}
+    pool = ctx.get("redis")
+    if pool is None:
+        logger.warning("No Redis connection in ARQ context; inference not triggered.")
+        return summary
+
+    slot = (dt_frame or datetime.now(timezone.utc)).strftime("%Y%m%d%H%M")
+    for st in stations:
+        job_id = f"infer-{st.id}-{slot}"  # deterministic: one run per station per satellite scan
+        try:
+            queued_id, reason = await InferenceService.enqueue_for_station(st, db, pool, job_id)
+        except Exception as exc:
+            logger.error(f"[{st.id}] Failed to enqueue inference: {exc}")
+            summary["skipped"][st.id] = f"error: {exc}"
+            continue
+        if queued_id:
+            summary["queued"].append(queued_id)
+            logger.info(f"[{st.id}] Inference queued: {queued_id}")
+        else:
+            summary["skipped"][st.id] = reason
+            logger.warning(f"[{st.id}] Inference skipped: {reason}")
+    return summary
+
+
+async def collect_inference_results(ctx: dict) -> dict[str, int]:
+    """ARQ Cron Task — every minute: save finished inference results into the predictions table."""
+    pool = ctx.get("redis")
+    if pool is None:
+        return {"saved": 0, "pending": 0, "dropped": 0}
+    async with SessionLocal() as db:
+        stats = await InferenceService.collect_finished_jobs(pool, db)
+    if stats["saved"] or stats["dropped"]:
+        logger.info(f"Inference results collected: {stats}")
+    return stats
 
 
 async def ingest_single_station(ctx: dict, station_id: str) -> dict[str, Any]:

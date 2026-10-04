@@ -27,7 +27,7 @@ async def _enrich_station_response(db: AsyncSession, station) -> StationResponse
 
     pred_stmt = (
         select(Prediction)
-        .where(Prediction.station_id == station.id)
+        .where(Prediction.station_id == station.id, Prediction.source == "model")
         .order_by(Prediction.predicted_at.desc())
         .limit(1)
     )
@@ -38,8 +38,9 @@ async def _enrich_station_response(db: AsyncSession, station) -> StationResponse
         dto.current_pgen_kw = round(latest_pred.estimated_power_kw, 1)
         dto.alert_level = latest_pred.alert_level
     else:
-        dto.current_pgen_kw = round(station.target_capacity_kw * 0.82, 1)
-        dto.alert_level = "Normal"
+        # No real model run yet: leave unknown instead of fabricating a value
+        dto.current_pgen_kw = None
+        dto.alert_level = None
 
     return dto
 

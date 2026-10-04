@@ -36,7 +36,7 @@ class DashboardService:
             # Query latest prediction
             pred_stmt = (
                 select(Prediction)
-                .where(Prediction.station_id == station.id)
+                .where(Prediction.station_id == station.id, Prediction.source == "model")
                 .order_by(Prediction.predicted_at.desc())
                 .limit(1)
             )
@@ -73,7 +73,7 @@ class DashboardService:
         # Query latest prediction
         pred_stmt = (
             select(Prediction)
-            .where(Prediction.station_id == station.id)
+            .where(Prediction.station_id == station.id, Prediction.source == "model")
             .order_by(Prediction.predicted_at.desc())
             .limit(1)
         )
@@ -138,7 +138,7 @@ class DashboardService:
         for station in active_stations:
             pred_stmt = (
                 select(Prediction)
-                .where(Prediction.station_id == station.id)
+                .where(Prediction.station_id == station.id, Prediction.source == "model")
                 .order_by(Prediction.predicted_at.desc())
                 .limit(1)
             )

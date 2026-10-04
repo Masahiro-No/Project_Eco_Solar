@@ -39,26 +39,34 @@ export function StationTable() {
             const isOnline = s.is_active;
             
             // Live pgen directly from backend
-            let pgen = 0;
+            // null = no real measurement/forecast available (never fabricate a value)
+            let pgen: number | null = null;
             if (s.id === selectedStationId && prediction) {
               pgen = Math.round(prediction.estimated_power_kw);
             } else if (s.current_pgen_kw !== undefined && s.current_pgen_kw !== null) {
               pgen = Math.round(s.current_pgen_kw);
-            } else {
-              pgen = isOnline ? Math.round((s.target_capacity_kw || 5000) * 0.82) : 0;
             }
 
             const ptarget = Math.round(s.target_capacity_kw || 5000);
-            const dp = ptarget - pgen;
+            const hasPgen = isOnline && pgen !== null;
+            const dp = pgen !== null ? ptarget - pgen : 0;
 
             return (
               <tr
                 key={s.id}
                 onClick={() => setSelectedStationId(s.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedStationId(s.id);
+                  }
+                }}
+                tabIndex={0}
+                aria-selected={isSelected}
                 className={`cursor-pointer border-b border-line last:border-0 transition-colors ${
                   isSelected ? 'bg-blue-50/70 font-semibold' : 'hover:bg-slate-50/60'
                 }`}
-                title={isSelected ? 'สถานีที่กำลังเลือก' : 'คลิกเพื่อเลือกสถานีนี้'}
+                title={isSelected ? t('station_selected_hint') : t('station_click_hint')}
               >
                 <td className="px-2.5 py-2 font-medium text-slate-600">
                   <div className="flex items-center gap-1.5">
@@ -69,14 +77,14 @@ export function StationTable() {
                 <td className="truncate px-2.5 py-2 font-medium text-ink" title={s.name}>
                   {s.name}
                 </td>
-                <td className="px-2.5 py-2 text-right tabular-nums">{isOnline ? pgen.toLocaleString() : '—'}</td>
+                <td className="px-2.5 py-2 text-right tabular-nums">{hasPgen ? pgen!.toLocaleString() : '—'}</td>
                 <td className="px-2.5 py-2 text-right tabular-nums">{ptarget.toLocaleString()}</td>
                 <td
                   className={`px-2.5 py-2 text-right font-semibold tabular-nums ${
-                    !isOnline ? 'text-muted' : dp > 0 ? 'text-warn' : 'text-ok'
+                    !hasPgen ? 'text-muted' : dp > 0 ? 'text-warn' : 'text-ok'
                   }`}
                 >
-                  {isOnline ? (dp > 0 ? `${dp}` : `+${-dp}`) : '—'}
+                  {hasPgen ? (dp > 0 ? `${dp}` : `+${-dp}`) : '—'}
                 </td>
                 <td className="px-2.5 py-2">
                   <span

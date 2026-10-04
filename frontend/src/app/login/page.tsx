@@ -23,6 +23,7 @@ import {
 import { useTranslations } from 'next-intl';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import { DEMO_MODE } from '@/lib/config';
 
 export default function LoginPage() {
   const t = useTranslations('common');
@@ -31,8 +32,8 @@ export default function LoginPage() {
   const { isLoggedIn, login } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState('operator@solardss.io');
-  const [password, setPassword] = useState('operator1234');
+  const [email, setEmail] = useState(DEMO_MODE ? 'operator@solardss.io' : '');
+  const [password, setPassword] = useState(DEMO_MODE ? 'operator1234' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -357,7 +358,8 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {/* Quick Demo Section */}
+            {/* Quick Demo Section (demo mode only) */}
+            {DEMO_MODE && (
             <div className="mt-5 border-t border-line pt-4">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[11.5px] font-semibold text-slate-500">
@@ -386,9 +388,8 @@ export default function LoginPage() {
                 {/* Sign In with Enterprise SSO Button */}
                 <button
                   type="button"
-                  onClick={() => {
-                    alert('Single Sign-On (SSO): รองรับ OAuth2/OIDC เชื่อมต่อระบบเครือข่ายองค์กร');
-                  }}
+                  disabled
+                  title="SSO is not configured yet"
                   className="flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
                 >
                   <Building2Icon className="h-3.5 w-3.5 text-slate-500" />
@@ -396,6 +397,7 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       </main>

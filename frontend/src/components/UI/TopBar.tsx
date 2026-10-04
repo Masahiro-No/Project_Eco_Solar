@@ -19,13 +19,11 @@ import { useAuth } from '@/context/AuthContext';
 import { useForecast } from '@/context/ForecastContext';
 
 type TopBarProps = {
-  station?: string;
-  onStationChange?: (s: string) => void;
   target?: string;
   onTargetChange?: (v: string) => void;
 };
 
-export function TopBar({ onStationChange, target, onTargetChange }: TopBarProps) {
+export function TopBar({ target, onTargetChange }: TopBarProps) {
   const t = useTranslations('common');
   const { locale, setLocale } = useLanguage();
   const { stations, selectedStationId, setSelectedStationId, selectedStation } = useForecast();
@@ -40,9 +38,9 @@ export function TopBar({ onStationChange, target, onTargetChange }: TopBarProps)
 
   return (
     <header className="flex h-16 w-full shrink-0 items-center border-b border-line bg-white shadow-sm">
-      <div className="flex h-full w-[230px] shrink-0 items-center gap-2.5 border-r border-line px-5">
+      <div className="flex h-full w-[64px] shrink-0 items-center justify-center gap-2.5 border-r border-line px-0 md:w-[230px] md:justify-start md:px-5">
         <SunIcon className="h-9 w-9 shrink-0 text-sun" strokeWidth={2.2} />
-        <div className="min-w-0 leading-tight">
+        <div className="hidden min-w-0 leading-tight md:block">
           <div className="text-[20px] font-bold tracking-tight text-[#1e3a8a]">SolarDSS</div>
           <div className="truncate text-[10px] font-medium text-muted">{t('brand_subtitle')}</div>
         </div>
@@ -60,7 +58,6 @@ export function TopBar({ onStationChange, target, onTargetChange }: TopBarProps)
                 setSelectedStationId(newId);
                 const found = stations.find((s) => s.id === newId);
                 if (found) {
-                  if (onStationChange) onStationChange(found.name);
                   if (onTargetChange) onTargetChange(String(Math.round(found.target_capacity_kw)));
                 }
               }}

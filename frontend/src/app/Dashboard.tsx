@@ -12,6 +12,8 @@ import { DecisionSupport } from '../components/UI/DecisionSupport';
 import { DecisionLog } from '../components/UI/DecisionLog';
 import { RecentAlerts } from '../components/UI/RecentAlerts';
 import { ServiceStatus } from '../components/UI/ServiceStatus';
+import { DataSourceBanner } from '../components/UI/DataSourceBanner';
+import { ForecastFreshness } from '../components/UI/ForecastFreshness';
 
 export function Dashboard() {
   const t = useTranslations('common');
@@ -24,16 +26,19 @@ export function Dashboard() {
           <h1 className="text-[22px] font-bold leading-tight text-[#0f1f4d]">{t('solar_forecast_title')}</h1>
           <p className="text-[13.5px] text-slate-600">{t('solar_forecast_desc')}</p>
         </div>
+        <ForecastFreshness />
       </div>
+
+      <DataSourceBanner />
 
       <KpiRow />
 
-      <div className="grid h-[225px] shrink-0 grid-cols-[1fr_1.35fr] gap-3.5">
+      <div className="grid shrink-0 grid-cols-1 gap-3.5 lg:h-[225px] lg:grid-cols-[1fr_1.35fr] [&>*]:min-h-[225px] lg:[&>*]:min-h-0">
         <GhiForecastChart />
         <CloudMovement />
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[1.3fr_1fr_0.95fr] gap-3.5">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3.5 lg:grid-cols-[1.3fr_1fr_0.95fr]">
         <div className="flex min-h-0 flex-col gap-2.5">
           <PowerForecastChart />
           <StationTable />

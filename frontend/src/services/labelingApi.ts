@@ -2,9 +2,8 @@
  * Labeling API client — ground-truth GHI (เครื่องวัดจริง) สำหรับ retrain LSTM.
  * ตรงกับ backend: api/label_studio/schema.py และ api/inference/schema.py
  */
+import { API_BASE_URL } from '@/lib/config';
 import { getAuthHeaders } from './api';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export interface AlignedForecastPoint {
   timestamp: string; // ISO (UTC) ช่อง 10 นาที

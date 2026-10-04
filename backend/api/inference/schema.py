@@ -33,6 +33,7 @@ class PredictionResultData(BaseModel):
     recommendation_text: str
     bess_advisory: Optional[str] = Field(None, description="Specific BESS battery storage advisory derived from cloud motion")
     satellite_image_url: Optional[str] = None
+    data_time: Optional[datetime] = Field(None, description="Timestamp of the newest weather observation used as model input")
 
 
 class InferenceResultResponse(BaseModel):

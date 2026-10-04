@@ -212,7 +212,12 @@ async def check_http_flow():
         # รอบเก่า (predicted 12:02 -> origin 12:00) และรอบใหม่ (12:32 -> origin 12:30): ช่องที่ซ้อนกันต้องใช้รอบใหม่
         for jid, at, vals in (("old", base + timedelta(minutes=2), [100.0 + i for i in range(18)]), ("new", base + timedelta(minutes=32), [200.0 + i for i in range(18)])):
             db.add(Prediction(job_id=jid, station_id="ST-001", predicted_at=at, ghi_forecast_curve=vals, estimated_power_kw=1, target_power_kw=1,
-                              delta_p_kw=0, cloud_trend="Clear", confidence=0.9, alert_level="Normal", recommendation_text="x"))
+                              delta_p_kw=0, cloud_trend="Clear", confidence=0.9, alert_level="Normal", recommendation_text="x",
+                              source="model", data_time=at - timedelta(minutes=2)))
+        # แถวที่ไม่ได้มาจากโมเดลจริง (source ว่าง) ต้องไม่ถูกนำมาแสดงเป็นค่าทำนาย
+        db.add(Prediction(job_id="seed", station_id="ST-001", predicted_at=base + timedelta(minutes=40), ghi_forecast_curve=[999.0] * 18,
+                          estimated_power_kw=1, target_power_kw=1, delta_p_kw=0, cloud_trend="Clear", confidence=0.9,
+                          alert_level="Normal", recommendation_text="x"))
         await db.commit()
 
     app = FastAPI()
@@ -244,6 +249,7 @@ async def check_http_flow():
         assert k_(10)["predicted_ghi"] == 100.0, "ช่อง 12:10 มีเฉพาะรอบเก่า"
         assert k_(40)["predicted_ghi"] == 200.0 and k_(40)["weather_ghi"] == 504.0, "ช่อง 12:40 ต้องใช้รอบใหม่"
         assert body["prediction_runs"] == 2 and body["label_count"] == 0 and body["label_error"] is None
+        assert all(p["predicted_ghi"] != 999.0 for p in body["points"]), "แถว source ว่างต้องไม่ถูกใช้"
 
         # --- ส่ง label แบบแก้เอง (เวลาไทย ไม่มี tz; 12:44 -> ปัดลง 12:40)
         pool.keys.clear()
