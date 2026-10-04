@@ -1,6 +1,7 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { API_BASE_URL, DEMO_MODE } from '@/lib/config';
 
 export type User = {
   id?: number;
@@ -28,145 +29,128 @@ const AuthContext = createContext<AuthContextType>({
   logout: () => {},
 });
 
-const DEFAULT_OPERATOR: User = {
+const DEFAULT_ROLE = 'Chief Dispatcher';
+
+// Only used when NEXT_PUBLIC_DEMO_MODE=true
+const DEMO_OPERATOR: User = {
   name: 'Grid Operator',
   email: 'operator@solardss.io',
-  role: 'Chief Dispatcher',
+  role: DEFAULT_ROLE,
 };
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  // true until the stored session has been read, so route guards don't redirect too early
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('solar_user');
-    const savedToken = localStorage.getItem('solar_token');
-
-    if (savedToken) {
-      setToken(savedToken);
-    }
-
-    if (savedUser) {
-      try {
-        setUser(JSON.parse(savedUser));
-      } catch {
-        setUser(null);
-      }
+    try {
+      const savedUser = localStorage.getItem('solar_user');
+      const savedToken = localStorage.getItem('solar_token');
+      if (savedToken) setToken(savedToken);
+      if (savedUser) setUser(JSON.parse(savedUser));
+    } catch {
+      setUser(null);
     }
     setIsLoading(false);
   }, []);
 
-  const login = async (
-    email?: string,
-    password?: string,
-    customName?: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    setIsLoading(true);
+  const persistUser = (u: User) => {
+    setUser(u);
+    localStorage.setItem('solar_user', JSON.stringify(u));
+  };
 
-    const targetEmail = (email || DEFAULT_OPERATOR.email).trim();
-    const targetPassword = password || 'operator1234';
+  const demoLogin = (email: string, customName?: string): { success: boolean } => {
+    persistUser({
+      name: customName || (email.includes('@') ? email.split('@')[0] : email) || DEMO_OPERATOR.name,
+      email: email.includes('@') ? email : DEMO_OPERATOR.email,
+      role: DEFAULT_ROLE,
+    });
+    return { success: true };
+  };
 
-    // 1. Attempt Real Backend API Login (FastAPI POST /api/auth/login)
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: targetEmail, password: targetPassword }),
-      });
+  const login = useCallback(
+    async (email?: string, password?: string, customName?: string): Promise<{ success: boolean; error?: string }> => {
+      const targetEmail = (email ?? '').trim();
+      const targetPassword = password ?? '';
 
-      if (response.ok) {
+      if (!targetEmail || !targetPassword) {
+        return { success: false, error: 'Invalid email or password' };
+      }
+
+      setIsLoading(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: targetEmail, password: targetPassword }),
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => null);
+          const detail = errData?.detail || 'Invalid email or password';
+          if (DEMO_MODE && targetEmail === DEMO_OPERATOR.email) {
+            return demoLogin(targetEmail, customName);
+          }
+          return { success: false, error: typeof detail === 'string' ? detail : 'Invalid email or password' };
+        }
+
         const data = await response.json();
-        const accessToken = data.access_token;
+        const accessToken: string = data.access_token;
         setToken(accessToken);
         localStorage.setItem('solar_token', accessToken);
 
-        // Fetch User Info (/api/auth/me)
+        let loggedUser: User = {
+          name: customName || targetEmail.split('@')[0],
+          email: targetEmail,
+          role: DEFAULT_ROLE,
+        };
         try {
           const meRes = await fetch(`${API_BASE_URL}/api/auth/me`, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
           if (meRes.ok) {
-            const meData = await meRes.json();
-            const loggedUser: User = {
-              id: meData.id,
-              name: customName || meData.email.split('@')[0].replace(/[._]/g, ' '),
-              email: meData.email,
-              role: DEFAULT_OPERATOR.role,
+            const me = await meRes.json();
+            loggedUser = {
+              id: me.id,
+              name: customName || String(me.email).split('@')[0].replace(/[._]/g, ' '),
+              email: me.email,
+              role: DEFAULT_ROLE,
             };
-            setUser(loggedUser);
-            localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-            setIsLoading(false);
-            return { success: true };
           }
         } catch (meErr) {
           console.warn('Could not fetch /api/auth/me, using fallback profile', meErr);
         }
-
-        // Fallback user profile with token
-        const loggedUser: User = {
-          name: customName || targetEmail.split('@')[0],
-          email: targetEmail,
-          role: DEFAULT_OPERATOR.role,
-        };
-        setUser(loggedUser);
-        localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-        setIsLoading(false);
+        persistUser(loggedUser);
         return { success: true };
-      } else {
-        // Backend returned error status
-        const errData = await response.json().catch(() => null);
-        const detail = errData?.detail || 'Invalid email or password';
-        console.warn(`[Backend Auth] Login rejected (${response.status}):`, detail);
-
-        // Demo fallback for operator demo testing
-        if (targetEmail === DEFAULT_OPERATOR.email || targetEmail === 'Grid Operator') {
-          const loggedUser: User = {
-            name: customName || DEFAULT_OPERATOR.name,
-            email: DEFAULT_OPERATOR.email,
-            role: DEFAULT_OPERATOR.role,
-          };
-          setUser(loggedUser);
-          localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-          setIsLoading(false);
-          return { success: true };
+      } catch {
+        // Backend unreachable
+        if (DEMO_MODE) {
+          console.info('[Auth] API unreachable, using offline demo mode.');
+          return demoLogin(targetEmail, customName);
         }
-
+        return { success: false, error: 'Cannot reach the server. Please try again later.' };
+      } finally {
         setIsLoading(false);
-        return { success: false, error: detail };
       }
-    } catch {
-      console.info('[Backend Auth] API unreachable, using seamless offline demo mode.');
-      // 2. Seamless Demo Fallback when backend server is offline
-      const loggedUser: User = {
-        name:
-          customName ||
-          (targetEmail.includes('@') ? targetEmail.split('@')[0] : targetEmail) ||
-          DEFAULT_OPERATOR.name,
-        email: targetEmail.includes('@') ? targetEmail : DEFAULT_OPERATOR.email,
-        role: DEFAULT_OPERATOR.role,
-      };
-      setUser(loggedUser);
-      localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-      setIsLoading(false);
-      return { success: true };
-    }
-  };
+    },
+    []
+  );
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setUser(null);
     setToken(null);
     localStorage.removeItem('solar_user');
     localStorage.removeItem('solar_token');
-  };
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, token, isLoggedIn: !!user, isLoading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, token, isLoggedIn: !!user, isLoading, login, logout }),
+    [user, token, isLoading, login, logout]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

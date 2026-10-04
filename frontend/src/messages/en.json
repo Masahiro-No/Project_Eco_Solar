@@ -256,6 +256,12 @@
     "station_id_label": "Station ID",
     "station_name_placeholder": "e.g. Yala Solar Plant",
     "station_id_placeholder": "e.g. ST-006",
-    "at_time": "At"
+    "at_time": "At",
+    "data_source_banner_title": "Showing simulated data",
+    "data_source_banner_desc": "The forecast service is not reachable, so values come from the in-browser model and sample data. Do not use them for operational decisions.",
+    "loading": "Loading…",
+    "station_selected_hint": "Currently selected station",
+    "station_click_hint": "Click to select this station",
+    "no_data": "No data"
   }
 }

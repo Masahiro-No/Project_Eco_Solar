@@ -5,7 +5,7 @@
  * Falls back seamlessly to mock data when backend is not running.
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '@/lib/config';
 
 export function getAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};

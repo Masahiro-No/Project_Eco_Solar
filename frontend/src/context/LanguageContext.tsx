@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { NextIntlClientProvider } from 'next-intl';
 import thMessages from '@/messages/th.json';
 import enMessages from '@/messages/en.json';
@@ -24,28 +24,41 @@ const LanguageContext = createContext<LanguageContextType>({
   toggleLanguage: () => {},
 });
 
-export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('th');
+const COOKIE_NAME = 'solar_locale';
 
+export function LanguageProvider({
+  children,
+  initialLocale = 'th',
+}: {
+  children: React.ReactNode;
+  /** Read from the cookie on the server so the first paint is already in the right language */
+  initialLocale?: Locale;
+}) {
+  const [locale, setLocaleState] = useState<Locale>(initialLocale);
+
+  // Keep <html lang> in sync for screen readers / hyphenation / font selection
   useEffect(() => {
-    const saved = localStorage.getItem('solar_locale') as Locale | null;
-    if (saved && (saved === 'th' || saved === 'en')) {
-      setLocaleState(saved);
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  const setLocale = useCallback((l: Locale) => {
+    setLocaleState(l);
+    document.cookie = `${COOKIE_NAME}=${l}; path=/; max-age=31536000; samesite=lax`;
+    try {
+      localStorage.setItem('solar_locale', l);
+    } catch {
+      /* storage unavailable */
     }
   }, []);
 
-  const setLocale = (l: Locale) => {
-    setLocaleState(l);
-    localStorage.setItem('solar_locale', l);
-  };
+  const toggleLanguage = useCallback(() => {
+    setLocale(locale === 'th' ? 'en' : 'th');
+  }, [locale, setLocale]);
 
-  const toggleLanguage = () => {
-    const nextLocale = locale === 'th' ? 'en' : 'th';
-    setLocale(nextLocale);
-  };
+  const value = useMemo(() => ({ locale, setLocale, toggleLanguage }), [locale, setLocale, toggleLanguage]);
 
   return (
-    <LanguageContext.Provider value={{ locale, setLocale, toggleLanguage }}>
+    <LanguageContext.Provider value={value}>
       <NextIntlClientProvider locale={locale} messages={messagesMap[locale]}>
         {children}
       </NextIntlClientProvider>
