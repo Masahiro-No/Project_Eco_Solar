@@ -21,6 +21,8 @@ except ImportError:
 class WorkerSettings:
     """Settings สำหรับ Trainer Worker (GPU Dedicated สำหรับเทรนโมเดลล้วนๆ)"""
     queue_name = "train_queue"
+    job_timeout = 3600  # retrain LSTM อาจนานเกิน default 300 วินาที
+    max_tries = 1  # ไม่ retry อัตโนมัติ (retrain ซ้ำทำให้เปลืองและอาจชนล็อก)
     functions = [f for f in [simple_work, train_model, train_timeseries_lstm, train_convlstm_nowcaster] if f is not None]
     redis_settings = RedisSettings(
         host=os.environ.get("REDIS_HOST", "localhost"),

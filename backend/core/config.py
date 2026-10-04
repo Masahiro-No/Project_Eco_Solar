@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     enable_retrain: bool = False
+    retrain_debounce_seconds: int = 300  # รอรวม label ที่ส่งใกล้กันก่อนเริ่ม retrain
     convlstm_retrain_threshold: int = 50
 
 settings = Settings()

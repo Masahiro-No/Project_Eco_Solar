@@ -442,7 +442,8 @@ async def train_timeseries_lstm(ctx: dict, job_payload_json: str = "{}") -> str:
     except Exception:
         payload = {}
 
-    result = execute_timeseries_retrain(payload)
+    import asyncio
+    result = await asyncio.to_thread(execute_timeseries_retrain, payload)  # งานหนัก/บล็อก: ไม่ให้ค้าง event loop ของ worker
     logger.info(f"[ARQ Job] train_timeseries_lstm result: {result}")
     import json
     return json.dumps(result)

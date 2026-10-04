@@ -39,3 +39,23 @@ class InferenceResultResponse(BaseModel):
     job_id: str
     status: str  # "queued" | "in_progress" | "complete" | "not_found"
     result: Optional[PredictionResultData] = None
+
+
+class AlignedForecastPoint(BaseModel):
+    timestamp: datetime  # ช่อง 10 นาที (UTC)
+    predicted_ghi: Optional[float] = Field(None, description="ค่าที่โมเดลพยากรณ์ไว้สำหรับช่องเวลานี้ (รอบพยากรณ์ล่าสุด)")
+    weather_ghi: Optional[float] = Field(None, description="GHI ใน weather_history (ค่าประมาณจาก API)")
+    label_ghi: Optional[float] = Field(None, description="GHI จริงที่ label ไว้แล้วใน Label Studio")
+
+
+class PredictionsByDateResponse(BaseModel):
+    station_id: str
+    date: str
+    timezone: str = "Asia/Bangkok"
+    prediction_runs: int
+    label_count: int
+    matched_label_count: int
+    mae_vs_label: Optional[float] = None
+    label_error: Optional[str] = Field(None, description="ถ้าอ่าน label จาก Label Studio ไม่ได้ จะบอกสาเหตุที่นี่")
+    points: list[AlignedForecastPoint]
+

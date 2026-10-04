@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class CreateProjectRequest(BaseModel):
@@ -70,3 +72,51 @@ class SubmitSatelliteAnnotationResponse(BaseModel):
     threshold: int
     retrain_enqueued: bool
     retrain_status: str
+
+
+class GroundTruthItem(BaseModel):
+    timestamp: str  # ISO-8601; ไม่มี timezone = เวลาไทย (UTC+7); ระบบปัดลงเป็นช่อง 10 นาที
+    ghi_actual: float
+    notes: str | None = None
+
+
+class BatchSubmitGroundTruthRequest(BaseModel):
+    station_id: str
+    items: list[GroundTruthItem] = Field(min_length=1, max_length=2000)
+    source: Literal["manual", "file"] = "manual"
+
+
+class RejectedItem(BaseModel):
+    index: int
+    reason: str
+
+
+class BatchSubmitGroundTruthResponse(BaseModel):
+    station_id: str
+    received: int
+    created: int
+    updated: int
+    unchanged: int
+    rejected: list[RejectedItem]
+    retrain_enqueued: bool
+    retrain_status: str
+
+
+class UploadPreviewResponse(BaseModel):
+    filename: str
+    headers: list[str]
+    guessed_timestamp: str | None = None
+    guessed_ghi: str | None = None
+    sample_rows: list[list[str]]
+    total_rows: int
+
+
+class UploadGroundTruthResponse(BatchSubmitGroundTruthResponse):
+    filename: str
+    date: str
+    total_rows: int
+    invalid_rows: int
+    outside_day: int
+    duplicates_collapsed: int
+    clamped_negative: int
+

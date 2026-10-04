@@ -10,6 +10,7 @@ import {
   LineChartIcon,
   LightbulbIcon,
   BellIcon,
+  ClipboardCheckIcon,
 } from 'lucide-react';
 
 const items = [
@@ -18,6 +19,7 @@ const items = [
   { id: 'forecast', key: 'nav_forecast' as const, icon: LineChartIcon, href: '/forecast' },
   { id: 'decision', key: 'nav_decision' as const, icon: LightbulbIcon, href: '/decision' },
   { id: 'alerts', key: 'nav_alerts' as const, icon: BellIcon, badge: 3, href: '/alerts' },
+  { id: 'labeling', key: 'nav_labeling' as const, icon: ClipboardCheckIcon, href: '/labeling' },
   // { id: 'models', key: 'nav_models' as const, icon: BrainIcon, href: '/models' },
   // { id: 'data', key: 'nav_data' as const, icon: DatabaseIcon, href: '/data' },
   // { id: 'jobs', key: 'nav_jobs' as const, icon: ListChecksIcon, href: '/jobs' },

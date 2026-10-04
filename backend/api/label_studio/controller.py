@@ -10,8 +10,6 @@ from api.label_studio.schema import (
     CreateProjectRequest,
     ImportTaskRequest,
     ProjectResponse,
-    SubmitGroundTruthRequest,
-    SubmitGroundTruthResponse,
     SubmitSatelliteAnnotationRequest,
     SubmitSatelliteAnnotationResponse,
     TaskResponse,
@@ -184,80 +182,6 @@ async def create_annotation(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Label Studio error: {e}") from None
     return AnnotationResponse(id=ann.id, task_id=task_id, result=payload.result)
-
-
-async def submit_ground_truth(
-    payload: SubmitGroundTruthRequest,
-    _: User = Depends(get_current_user),
-) -> SubmitGroundTruthResponse:
-    """Submit real Pyranometer GHI ground truth -> Label Studio -> trigger/skip retrain."""
-    svc = LabelStudioService()
-    project_title = "Solar GHI Ground Truth Verification"
-    label_cfg = CONFIG_TEMPLATES["solar_ghi_verify"]
-
-    # 1. Get or create project in Label Studio
-    try:
-        p = svc.get_or_create_project(project_title, label_cfg)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Label Studio project error: {e}") from None
-
-    # 2. Create task
-    task_data = {
-        "station_id": payload.station_id,
-        "timestamp": payload.timestamp,
-        "ghi_actual": payload.ghi_actual,
-        "temperature": payload.temperature,
-        "relative_humidity": payload.relative_humidity,
-        "notes": payload.notes,
-    }
-    try:
-        t = svc.create_task(p.id, task_data)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to create task in Label Studio: {e}") from None
-
-    # 3. Create annotation
-    annotation_result = [
-        {
-            "value": {"number": payload.ghi_actual},
-            "from_name": "ghi",
-            "to_name": "station",
-            "type": "number",
-        }
-    ]
-    try:
-        ann = svc.create_annotation(task_id=t.id, result=annotation_result, ground_truth=True)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to create annotation in Label Studio: {e}") from None
-
-    # 4. Check retrain trigger (Disabled by default via ENABLE_RETRAIN)
-    retrain_enqueued = False
-    retrain_status = "retrain_disabled (standby)"
-
-    if settings.enable_retrain:
-        try:
-            job_payload = {
-                "station_id": payload.station_id,
-                "timestamp": payload.timestamp,
-                "ghi_actual": payload.ghi_actual,
-                "task_id": t.id,
-                "annotation_id": ann.id,
-            }
-            import json
-            await JobService.enqueue("train_timeseries_lstm", json.dumps(job_payload), queue_name="train_queue")
-            retrain_enqueued = True
-            retrain_status = "enqueued"
-        except Exception as e:
-            retrain_status = f"enqueue_failed: {e}"
-
-    return SubmitGroundTruthResponse(
-        task_id=t.id,
-        annotation_id=ann.id,
-        station_id=payload.station_id,
-        timestamp=payload.timestamp,
-        ghi_actual=payload.ghi_actual,
-        retrain_enqueued=retrain_enqueued,
-        retrain_status=retrain_status,
-    )
 
 
 async def submit_satellite_annotation(

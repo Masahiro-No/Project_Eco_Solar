@@ -3,6 +3,7 @@ from fastapi import APIRouter, status
 from api.inference.controller import (
     get_latest_prediction,
     get_prediction_history,
+    get_predictions_by_date,
     get_result,
     predict,
 )
@@ -10,6 +11,7 @@ from api.inference.schema import (
     InferenceResponse,
     InferenceResultResponse,
     PredictionResultData,
+    PredictionsByDateResponse,
 )
 
 router = APIRouter(prefix="/inference", tags=["inference"])
@@ -46,3 +48,12 @@ router.add_api_route(
     status_code=status.HTTP_200_OK,
     summary="Get Historical Forecasts for Comparison",
 )
+router.add_api_route(
+    "/predictions-by-date",
+    get_predictions_by_date,
+    methods=["GET"],
+    response_model=PredictionsByDateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Forecasts of a day aligned to real time, with ground-truth labels",
+)
+

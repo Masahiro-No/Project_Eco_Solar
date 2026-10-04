@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir --default-timeout=120 --retries=5 \
     "onnx>=1.16.0" \
     "onnxruntime>=1.17.0" \
     "sqlalchemy>=2.0,<3.0" \
+    "requests>=2.31" \
     "psycopg2-binary>=2.9" \
     "redis>=5.0" \
     "opentelemetry-exporter-otlp-proto-grpc"

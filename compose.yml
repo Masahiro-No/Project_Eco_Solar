@@ -119,7 +119,7 @@ services:
     environment:
       database_url: "postgresql+asyncpg://myuser:mypassword@postgres/mydatabase"
       label_studio_url: "http://label-studio:8080"
-      label_studio_api_key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc5MDk1MTIwMiwiaWF0IjoxNzkwODY0ODAyLCJqdGkiOiI4ODQ1NWEzNzk3Mzk0NDI3OWZhMjI2Mjk5YTZlYWYwYyIsInVzZXJfaWQiOiIxIn0.g6xdTALwRbv6YbZ9ghS0wP4w8fgfkdc59GXGKwDEdPc"
+      label_studio_api_key: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
       minio_endpoint: "minio:9000"
       redis_host: "redis"
       redis_port: "6379"
@@ -196,7 +196,8 @@ services:
       # --- LSTM retrain (อ่าน weather_history/ground_truth_labels จาก Postgres) ---
       DATABASE_URL: "postgresql+psycopg2://myuser:mypassword@postgres/mydatabase"
       RETRAIN_LOOKBACK_DAYS: "45"
-      RETRAIN_MIN_LABELS: "6"
+      LABEL_STUDIO_URL: "http://label-studio:8080"
+      LABEL_STUDIO_API_KEY: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
       RETRAIN_MAX_REGRESSION_RATIO: "1.0"
     depends_on:
       redis:

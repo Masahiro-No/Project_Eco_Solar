@@ -1,7 +1,8 @@
+import bisect
 import math
 import random
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import Optional
 
 from arq import create_pool
@@ -366,3 +367,65 @@ class InferenceService:
             )
             for pred, station_name in rows
         ]
+
+    @staticmethod
+    async def get_aligned_predictions(station_id: str, day: date, db: AsyncSession) -> dict:
+        """ค่าที่โมเดลพยากรณ์ไว้ จัดเรียงตามเวลาจริงของวัน (เวลาไทย) ที่เลือก.
+
+        เวลาของจุดที่ i ในเส้นพยากรณ์ = (ช่องข้อมูลล่าสุดใน weather_history ที่ไม่เกิน predicted_at) + (i+1)*ระยะห่างของจุด
+        ช่องเวลาเดียวกันที่ถูกพยากรณ์หลายรอบ ใช้รอบที่ origin ใหม่ที่สุด.
+        Returns: {"pred": {slot: ghi}, "weather": {slot: ghi}, "runs": n}
+        """
+        from api.label_studio.ground_truth import floor_slot, th_day_bounds
+
+        step = timedelta(minutes=10)
+        start, end = th_day_bounds(day)
+        lead = step * 18
+
+        def aware(dt: datetime) -> datetime:
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+        def nearest_slot(dt: datetime) -> datetime:  # ข้อมูล weather: ใกล้สุด (กึ่งกลางปัดขึ้น)
+            return floor_slot(aware(dt) + step / 2)
+
+        w_res = await db.execute(
+            select(WeatherHistory.timestamp, WeatherHistory.ghi)
+            .where(WeatherHistory.station_id == station_id, WeatherHistory.timestamp >= start - lead, WeatherHistory.timestamp < end)
+            .order_by(WeatherHistory.timestamp)
+        )
+        weather: dict[datetime, float] = {}
+        for ts, ghi in w_res.all():
+            if ghi is not None:
+                weather[nearest_slot(ts)] = float(ghi)
+        w_slots = sorted(weather)
+
+        p_res = await db.execute(
+            select(Prediction.predicted_at, Prediction.ghi_forecast_curve, Prediction.forecast_horizon_hours)
+            .where(Prediction.station_id == station_id, Prediction.predicted_at >= start - lead, Prediction.predicted_at < end)
+            .order_by(Prediction.predicted_at)
+        )
+        pred: dict[datetime, tuple[datetime, float]] = {}
+        runs = 0
+        for predicted_at, curve, horizon_hours in p_res.all():
+            curve = curve or []
+            if not curve:
+                continue
+            pa = aware(predicted_at)
+            i = bisect.bisect_right(w_slots, pa)
+            origin = w_slots[i - 1] if i else floor_slot(pa)
+            # ระยะห่างของจุด = horizon / จำนวนจุด (โมเดลจริง 18 จุด = 10 นาที; ข้อมูล seed 6 จุด = 30 นาที)
+            gap = step * max(1, round((horizon_hours or 3) * 6 / len(curve)))
+            used = False
+            for k, value in enumerate(curve):
+                slot = origin + gap * (k + 1)
+                if start <= slot < end and (slot not in pred or origin >= pred[slot][0]):
+                    pred[slot] = (origin, float(value))
+                    used = True
+            runs += 1 if used else 0
+
+        return {
+            "pred": {s: v for s, (_, v) in pred.items()},
+            "weather": {s: g for s, g in weather.items() if start <= s < end},
+            "runs": runs,
+        }
+
