@@ -5,10 +5,11 @@ import Link from 'next/link';
 import { MapPinIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
-import { stations } from '@/data/dashboard';
+import { useForecast } from '@/context/ForecastContext';
 
 export function StationTable() {
   const t = useTranslations('common');
+  const { stations, selectedStationId, setSelectedStationId, prediction } = useForecast();
 
   return (
     <Panel
@@ -33,31 +34,58 @@ export function StationTable() {
           </tr>
         </thead>
         <tbody>
-          {stations.slice(0, 4).map((s) => {
-            const dp = s.ptarget - s.pgen;
+          {stations.slice(0, 5).map((s) => {
+            const isSelected = s.id === selectedStationId;
+            const isOnline = s.is_active;
+            
+            // Live pgen directly from backend
+            let pgen = 0;
+            if (s.id === selectedStationId && prediction) {
+              pgen = Math.round(prediction.estimated_power_kw);
+            } else if (s.current_pgen_kw !== undefined && s.current_pgen_kw !== null) {
+              pgen = Math.round(s.current_pgen_kw);
+            } else {
+              pgen = isOnline ? Math.round((s.target_capacity_kw || 5000) * 0.82) : 0;
+            }
+
+            const ptarget = Math.round(s.target_capacity_kw || 5000);
+            const dp = ptarget - pgen;
+
             return (
-              <tr key={s.id} className="border-b border-line last:border-0 hover:bg-slate-50/60">
-                <td className="px-2.5 py-2 text-slate-600 font-medium">{s.id}</td>
+              <tr
+                key={s.id}
+                onClick={() => setSelectedStationId(s.id)}
+                className={`cursor-pointer border-b border-line last:border-0 transition-colors ${
+                  isSelected ? 'bg-blue-50/70 font-semibold' : 'hover:bg-slate-50/60'
+                }`}
+                title={isSelected ? 'สถานีที่กำลังเลือก' : 'คลิกเพื่อเลือกสถานีนี้'}
+              >
+                <td className="px-2.5 py-2 font-medium text-slate-600">
+                  <div className="flex items-center gap-1.5">
+                    {isSelected && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
+                    <span>{s.id}</span>
+                  </div>
+                </td>
                 <td className="truncate px-2.5 py-2 font-medium text-ink" title={s.name}>
                   {s.name}
                 </td>
-                <td className="px-2.5 py-2 text-right tabular-nums">{s.online ? s.pgen : '—'}</td>
-                <td className="px-2.5 py-2 text-right tabular-nums">{s.ptarget}</td>
+                <td className="px-2.5 py-2 text-right tabular-nums">{isOnline ? pgen.toLocaleString() : '—'}</td>
+                <td className="px-2.5 py-2 text-right tabular-nums">{ptarget.toLocaleString()}</td>
                 <td
                   className={`px-2.5 py-2 text-right font-semibold tabular-nums ${
-                    !s.online ? 'text-muted' : dp > 0 ? 'text-warn' : 'text-ok'
+                    !isOnline ? 'text-muted' : dp > 0 ? 'text-warn' : 'text-ok'
                   }`}
                 >
-                  {s.online ? (dp > 0 ? `${dp}` : `+${-dp}`) : '—'}
+                  {isOnline ? (dp > 0 ? `${dp}` : `+${-dp}`) : '—'}
                 </td>
                 <td className="px-2.5 py-2">
                   <span
                     className={`inline-flex items-center gap-1.5 whitespace-nowrap font-medium ${
-                      s.online ? 'text-ok' : 'text-muted'
+                      isOnline ? 'text-ok' : 'text-muted'
                     }`}
                   >
-                    <span className={`h-2 w-2 rounded-full ${s.online ? 'bg-ok' : 'bg-slate-300'}`} />
-                    {s.online ? t('online') : t('offline')}
+                    <span className={`h-2 w-2 rounded-full ${isOnline ? 'bg-ok' : 'bg-slate-300'}`} />
+                    {isOnline ? t('online') : t('offline')}
                   </span>
                 </td>
               </tr>

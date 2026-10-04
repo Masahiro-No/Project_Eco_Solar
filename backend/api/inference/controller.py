@@ -1,8 +1,9 @@
+from typing import Optional
 from fastapi import Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
-from api.auth.service import get_current_user
+from api.auth.service import get_current_user, get_optional_current_user
 from api.inference.schema import (
     InferenceRequest,
     InferenceResponse,
@@ -45,7 +46,7 @@ async def get_result(
 async def get_latest_prediction(
     station_id: str,
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: Optional[User] = Depends(get_optional_current_user),
 ) -> PredictionResultData:
     """ดึงผลการพยากรณ์รอบล่าสุดของสถานีขึ้นแสดงบน Dashboard ทันที"""
     return await InferenceService.get_latest_prediction(station_id, db=db)
@@ -55,7 +56,7 @@ async def get_prediction_history(
     station_id: str,
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(get_current_user),
+    _: Optional[User] = Depends(get_optional_current_user),
 ) -> list[PredictionResultData]:
     """ดึงประวัติผลพยากรณ์ย้อนหลังเพื่อนำไปพลอตกราฟเปรียบเทียบ"""
     return await InferenceService.get_prediction_history(station_id, db=db, limit=limit)

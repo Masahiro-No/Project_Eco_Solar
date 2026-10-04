@@ -35,6 +35,8 @@ class StationResponse(StationBase):
     deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    current_pgen_kw: Optional[float] = None
+    alert_level: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

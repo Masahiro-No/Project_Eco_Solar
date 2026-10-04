@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Optional
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -69,3 +70,25 @@ async def get_current_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
+
+
+optional_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def get_optional_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
+    session: AsyncSession = Depends(get_db_session),
+) -> Optional[User]:
+    """JWT dependency for public / optional endpoints."""
+    if not credentials:
+        return None
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id: int = int(payload["sub"])
+    except Exception:
+        return None
+
+    repo = AuthRepository(session)
+    return await repo.get_user_by_id(user_id)
+

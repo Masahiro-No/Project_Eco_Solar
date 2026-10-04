@@ -66,6 +66,8 @@
     "th_inverters": "Inverters",
     "th_pr": "PR Ratio",
     "th_actions": "Actions",
+    "station_actions": "Actions",
+    "all_systems_operational": "All Systems Operational",
 
     "decision_support_title": "Decision Support",
     "decision_log_title": "Decision Log",

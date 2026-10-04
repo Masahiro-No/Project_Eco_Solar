@@ -4,27 +4,24 @@ from arq import cron
 from arq.connections import RedisSettings
 
 try:
+    from service.workers.inference_worker import run_inference
+except ImportError:
+    run_inference = None
+
+try:
     from service.workers.simple_worker import simple_work
+    from service.workers.train_worker import train_convlstm_nowcaster, train_model, train_timeseries_lstm
 except ImportError:
     simple_work = None
-
-try:
-    from service.workers.train_worker import train_convlstm_nowcaster, train_model, train_timeseries_lstm
-    _train_functions = [f for f in [simple_work, train_model, train_timeseries_lstm, train_convlstm_nowcaster] if f is not None]
-except ImportError:
-    _train_functions = [f for f in [simple_work] if f is not None]
-
-try:
-    from service.workers.inference_worker import run_inference
-    _inference_functions = [run_inference]
-except ImportError:
-    _inference_functions = []
+    train_model = None
+    train_timeseries_lstm = None
+    train_convlstm_nowcaster = None
 
 
 class WorkerSettings:
     """Settings สำหรับ Trainer Worker (GPU Dedicated สำหรับเทรนโมเดลล้วนๆ)"""
     queue_name = "train_queue"
-    functions = _train_functions
+    functions = [f for f in [simple_work, train_model, train_timeseries_lstm, train_convlstm_nowcaster] if f is not None]
     redis_settings = RedisSettings(
         host=os.environ.get("REDIS_HOST", "localhost"),
         port=int(os.environ.get("REDIS_PORT", "6379")),
@@ -34,7 +31,7 @@ class WorkerSettings:
 class InferenceWorkerSettings:
     """Settings สำหรับ Solar Forecast Inference Worker (แยกคิว/Container)"""
     queue_name = "inference_queue"
-    functions = _inference_functions
+    functions = [f for f in [run_inference] if f is not None]
     redis_settings = RedisSettings(
         host=os.environ.get("REDIS_HOST", "localhost"),
         port=int(os.environ.get("REDIS_PORT", "6379")),

@@ -137,6 +137,33 @@ services:
       - ./backend/api:/app/api
       - ./backend/core:/app/core
       - ./backend/db:/app/db
+      - ./backend/main.py:/app/main.py
+      - ./backend/scripts:/app/scripts
+      - ./model:/app/model
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # -------------------------
+  # Frontend (Next.js 15 Web Application)
+  # -------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - INTERNAL_API_URL=http://api:8000
+    depends_on:
+      - api
     logging:
       driver: "json-file"
       options:
@@ -175,13 +202,13 @@ services:
       - ./logs:/workspace/logs
       - ./model:/workspace/model
       - ./service:/workspace/service
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
     logging:
       driver: "json-file"
       options:
@@ -385,7 +412,7 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "3000:3000"
+      - "3002:3000"
     depends_on:
       - prometheus
       - loki

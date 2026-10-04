@@ -13,21 +13,30 @@ import {
   LogOutIcon,
   LogInIcon,
 } from 'lucide-react';
-import { stationOptions } from '@/data/dashboard';
 import { useTranslations } from 'next-intl';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
+import { useForecast } from '@/context/ForecastContext';
 
 type TopBarProps = {
-  station: string;
-  onStationChange: (s: string) => void;
-  target: string;
-  onTargetChange: (v: string) => void;
+  station?: string;
+  onStationChange?: (s: string) => void;
+  target?: string;
+  onTargetChange?: (v: string) => void;
 };
 
-export function TopBar({ station, onStationChange, target, onTargetChange }: TopBarProps) {
+export function TopBar({ onStationChange, target, onTargetChange }: TopBarProps) {
   const t = useTranslations('common');
   const { locale, setLocale } = useLanguage();
+  const { stations, selectedStationId, setSelectedStationId, selectedStation } = useForecast();
+
+  const currentStationValue = selectedStationId || 'ST-001';
+  const currentTargetValue =
+    target !== undefined && target !== ''
+      ? target
+      : selectedStation?.target_capacity_kw
+      ? String(Math.round(selectedStation.target_capacity_kw))
+      : '5000';
 
   return (
     <header className="flex h-16 w-full shrink-0 items-center border-b border-line bg-white shadow-sm">
@@ -45,12 +54,22 @@ export function TopBar({ station, onStationChange, target, onTargetChange }: Top
           <span className="relative">
             <MapPinIcon className="pointer-events-none absolute left-3 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-brand" />
             <select
-              value={station}
-              onChange={(e) => onStationChange(e.target.value)}
-              className="h-10 w-[240px] appearance-none rounded-lg border border-line bg-white pl-9 pr-8 text-[14px] text-ink focus:border-brand-mid focus:outline-none focus:ring-2 focus:ring-brand-soft"
+              value={currentStationValue}
+              onChange={(e) => {
+                const newId = e.target.value;
+                setSelectedStationId(newId);
+                const found = stations.find((s) => s.id === newId);
+                if (found) {
+                  if (onStationChange) onStationChange(found.name);
+                  if (onTargetChange) onTargetChange(String(Math.round(found.target_capacity_kw)));
+                }
+              }}
+              className="h-10 w-[270px] appearance-none rounded-lg border border-line bg-white pl-9 pr-8 text-[13.5px] font-medium text-ink focus:border-brand-mid focus:outline-none focus:ring-2 focus:ring-brand-soft truncate"
             >
-              {stationOptions.map((s) => (
-                <option key={s}>{s}</option>
+              {stations.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.id})
+                </option>
               ))}
             </select>
             <ChevronDownIcon className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
@@ -61,11 +80,14 @@ export function TopBar({ station, onStationChange, target, onTargetChange }: Top
           <span className="whitespace-nowrap">{t('ptarget_label')}</span>
           <span className="flex h-10 overflow-hidden rounded-lg border border-line focus-within:border-brand-mid focus-within:ring-2 focus-within:ring-brand-soft">
             <input
-              value={target}
-              onChange={(e) => onTargetChange(e.target.value.replace(/[^0-9]/g, ''))}
+              value={currentTargetValue}
+              onChange={(e) => {
+                const cleanVal = e.target.value.replace(/[^0-9]/g, '');
+                if (onTargetChange) onTargetChange(cleanVal);
+              }}
               inputMode="numeric"
               aria-label="P_target in kW"
-              className="w-[110px] px-3 text-[14px] text-ink focus:outline-none"
+              className="w-[110px] px-3 text-[14px] font-medium text-ink focus:outline-none"
             />
             <span className="flex items-center border-l border-line bg-brand-soft px-3 text-[13px] font-semibold text-brand">kW</span>
           </span>
