@@ -11,12 +11,15 @@ import {
   XIcon,
   RefreshCwIcon,
   CompassIcon,
+  SettingsIcon,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
 import { solarApi, StationCreateRequest, NearestStationResponse } from '@/services/api';
 import { useAuth } from '@/context/AuthContext';
+import { useForecast } from '@/context/ForecastContext';
+import { StationSettings } from '@/components/UI/StationSettings';
 
 // Leaflet touches `window`, so the map is only rendered in the browser
 const LocationPicker = dynamic(() => import('@/components/UI/LocationPicker'), {
@@ -56,7 +59,10 @@ function getStationProvince(name: string): string {
 export default function StationsPage() {
   const t = useTranslations('common');
   const { isAdmin } = useAuth();
+  const { reloadStations } = useForecast();
   const [stationList, setStationList] = useState<StationDashboardItem[]>([]);
+  // the station whose settings are open (click a row)
+  const [settingsFor, setSettingsFor] = useState<StationDashboardItem | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'online' | 'offline'>('all');
   const [isLoading, setIsLoading] = useState(true);
@@ -379,7 +385,12 @@ export default function StationsPage() {
                 </tr>
               ) : (
                 filtered.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50/70 transition-colors">
+                  <tr
+                    key={s.id}
+                    onClick={() => setSettingsFor(s)}
+                    title={t(isAdmin ? 'stc_open_hint' : 'stc_view_hint')}
+                    className="cursor-pointer transition-colors hover:bg-brand-soft/60"
+                  >
                     <td className="px-4 py-3 font-bold text-brand tabular-nums">
                       <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px]">{s.id}</span>
                     </td>
@@ -412,7 +423,16 @@ export default function StationsPage() {
                         {s.is_active ? t('online') : t('offline')}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSettingsFor(s)}
+                        className="flex items-center gap-1 rounded border border-line px-2.5 py-1 text-[11.5px] font-semibold text-slate-700 transition hover:bg-canvas"
+                      >
+                        <SettingsIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                        {t(isAdmin ? 'stc_open' : 'stc_view')}
+                      </button>
                       {isAdmin && (
                       <button
                         onClick={() => handleToggleActive(s.id, s.is_active)}
@@ -425,6 +445,7 @@ export default function StationsPage() {
                         {s.is_active ? t('soft_delete_action') : t('restore_action')}
                       </button>
                       )}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -433,6 +454,18 @@ export default function StationsPage() {
           </table>
         </div>
       </Panel>
+
+      {settingsFor && (
+        <StationSettings
+          station={settingsFor}
+          canEdit={isAdmin}
+          onClose={() => setSettingsFor(null)}
+          onSaved={async () => {
+            await loadStations();
+            await reloadStations(); // the station selector and the target in the top bar read the same list
+          }}
+        />
+      )}
 
       {/* Modal: Create Station */}
       {showCreateModal && (

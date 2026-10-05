@@ -99,7 +99,13 @@ export function CloudPanel() {
               className={`mt-1.5 inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${
                 prediction.sat_calibration_verified ? 'bg-ok-soft text-[#166534]' : 'bg-slate-100 text-slate-700'
               }`}
-              title={t(prediction.sat_calibration_verified ? 'sat_verified_tip' : 'sat_unverified_tip')}
+              title={
+                !prediction.sat_calibration_verified
+                  ? t('sat_unverified_tip')
+                  : prediction.sat_calibration_check && !prediction.sat_calibration_check.fitted && prediction.sat_calibration_check.mae !== null
+                  ? t('sat_checked_tip', { pairs: prediction.sat_calibration_check.pairs ?? 0, mae: prediction.sat_calibration_check.mae.toFixed(2) })
+                  : t('sat_verified_tip')
+              }
             >
               {prediction.sat_calibration_verified ? (
                 <BadgeCheckIcon className="h-3.5 w-3.5" aria-hidden="true" />

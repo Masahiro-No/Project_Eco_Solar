@@ -105,6 +105,8 @@ export interface PredictionResultData {
   sat_ghi_loss_now_pct?: number | null;
   /** true = the satellite relation was fitted on measured GHI of this station */
   sat_calibration_verified?: boolean | null;
+  /** when verified: fitted on this station, or the line of another station checked here (error in clear-sky index) */
+  sat_calibration_check?: { fitted: boolean; pairs: number | null; mae: number | null } | null;
   /** Target per step: the smaller of P_target and a share of the clear-sky output at that time */
   target_profile_kw?: number[] | null;
   /** Typical error range of the GHI forecast: forecast -/+ the model's RMSE at that lead time */

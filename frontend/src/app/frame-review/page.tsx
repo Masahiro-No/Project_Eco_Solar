@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { AlertTriangleIcon, BanIcon, CheckIcon, RefreshCwIcon, SatelliteIcon, SaveIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
@@ -114,6 +115,19 @@ export default function FrameReviewPage() {
     });
   };
 
+  // Frames without an automatic hint are marked as usable; the flagged ones are left for the reviewer to look at
+  const acceptAllUnflagged = () => {
+    setMessage(null);
+    setPending((cur) => {
+      const copy = { ...cur };
+      for (const f of data?.frames ?? []) {
+        if (f.flags.length === 0 && !f.review && !copy[f.timestamp]) copy[f.timestamp] = { status: 'accepted', reason: reasonFor(f.flags) };
+      }
+      return copy;
+    });
+  };
+  const unreviewedClean = (data?.frames ?? []).filter((f) => f.flags.length === 0 && !f.review && !pending[f.timestamp]).length;
+
   const save = async () => {
     if (!stationId || pendingCount === 0) return;
     setBusy(true);
@@ -158,7 +172,16 @@ export default function FrameReviewPage() {
         </div>
       </div>
 
-      <Panel title={t('fr_status_title')} icon={<SatelliteIcon className="h-5 w-5 text-brand" />} className="shrink-0">
+      <Panel
+        title={t('fr_status_title')}
+        icon={<SatelliteIcon className="h-5 w-5 text-brand" />}
+        className="shrink-0"
+        action={
+          <Link href="/retrain" className="text-[12.5px] font-semibold text-brand underline">
+            {t('rt_open_page')}
+          </Link>
+        }
+      >
         <div className="grid grid-cols-1 gap-4 text-[13px] text-slate-700 md:grid-cols-3">
           <div>
             <p className="font-semibold text-ink">{t('fr_batch')}</p>
@@ -272,6 +295,16 @@ export default function FrameReviewPage() {
                 <input type="checkbox" checked={onlyFlagged} onChange={(e) => setOnlyFlagged(e.target.checked)} />
                 {t('fr_only_flagged')}
               </label>
+              <button
+                type="button"
+                onClick={acceptAllUnflagged}
+                disabled={unreviewedClean === 0}
+                title={t('fr_accept_clean_tip')}
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-line bg-white px-3 font-semibold text-slate-700 hover:bg-canvas disabled:opacity-50"
+              >
+                <CheckIcon className="h-4 w-4" aria-hidden="true" />
+                {t('fr_accept_clean', { n: unreviewedClean })}
+              </button>
               <button
                 type="button"
                 onClick={rejectAllFlagged}

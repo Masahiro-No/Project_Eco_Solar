@@ -6,6 +6,7 @@ import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Scatter, Toolt
 import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import { Panel } from '@/components/UI/Panel';
+import { LstmStatusPanel } from '@/components/UI/LstmStatusPanel';
 import { useAuth } from '@/context/AuthContext';
 import { solarApi, StationResponse } from '@/services/api';
 import {
@@ -229,6 +230,8 @@ export default function LabelingPage() {
           {t('lb_label_error')}: {data.label_error}
         </div>
       )}
+
+      <LstmStatusPanel refreshKey={result} />
 
       <Panel
         className="shrink-0"

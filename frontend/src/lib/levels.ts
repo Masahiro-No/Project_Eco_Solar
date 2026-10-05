@@ -53,3 +53,9 @@ export function impactLevelOfLoss(lossPct: number | null | undefined): CloudImpa
   if (lossPct >= LOSS_MEDIUM_FROM_PCT) return 'medium';
   return 'low';
 }
+
+/** Status codes of the satellite branch of a forecast round (same names as the backend). */
+export const SATELLITE_STATUSES = ['ok', 'shifted', 'observed_only', 'missing', 'low_sun', 'night', 'model_unavailable'] as const;
+export type SatelliteStatusCode = (typeof SATELLITE_STATUSES)[number];
+export const isSatelliteStatus = (s: string | null | undefined): s is SatelliteStatusCode =>
+  !!s && (SATELLITE_STATUSES as readonly string[]).includes(s);
