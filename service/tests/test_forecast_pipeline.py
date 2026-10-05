@@ -210,6 +210,22 @@ def test_target_follows_the_sun():
     assert noon.target_profile_kw[0] == 3000.0
 
 
+def test_uncertainty_band_is_the_forecast_plus_minus_the_rmse_of_the_lead_time():
+    meta = {"daylight_metrics": {"test_day_rmse_plus_10min": 80.0, "test_day_rmse_plus_30min": 100.0, "test_day_mae_plus_10min": 50.0},
+            "step_metrics": STEP_METRICS}
+    metrics = decision.daylight_rmse_metrics(meta)
+    assert metrics == {"test_rmse_plus_10min": 80.0, "test_rmse_plus_30min": 100.0}      # daylight errors, RMSE only
+    assert decision.daylight_rmse_metrics({"step_metrics": STEP_METRICS}) == STEP_METRICS  # older model
+    lower, upper = decision.uncertainty_band([500.0, 40.0, 950.0, 30.0], [900.0, 900.0, 1000.0, 0.0], metrics)
+    assert (lower[0], upper[0]) == (420.0, 580.0)            # +10 min: -/+ 80
+    assert (lower[1], upper[1]) == (0.0, 130.0)              # +20 min: -/+ 90, never below 0
+    assert (lower[2], upper[2]) == (850.0, 1050.0)           # +30 min: -/+ 100
+    assert (lower[3], upper[3]) == (0.0, 0.0)                # night
+    capped = decision.uncertainty_band([1150.0], [1000.0], metrics)
+    assert capped[1][0] == 1200.0                            # at most 1.2 x clear sky
+    assert decision.uncertainty_band([500.0], [900.0], None) is None
+
+
 def test_rmse_interpolation():
     assert decision.rmse_at_lead(STEP_METRICS, 10) == 53.6
     assert decision.rmse_at_lead(STEP_METRICS, 20) == pytest.approx((53.6 + 70.38) / 2)

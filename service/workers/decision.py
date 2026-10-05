@@ -33,6 +33,9 @@ CLOUD_LOOKAHEAD_MIN = 60
 # share of the clear-sky output a plant is expected to deliver (measured GHI at ST-002 reaches clear sky on its best quarter of slots)
 TARGET_CLEARSKY_FRACTION = float(os.environ.get("TARGET_CLEARSKY_FRACTION", "0.8"))
 
+# upper limit of the uncertainty band: GHI measured at ST-002 peaked at 1.18 x clear sky (light reflected by cloud edges)
+UNCERTAINTY_MAX_CLEARSKY_RATIO = 1.2
+
 LEVEL_TH = {"low": "ต่ำ", "medium": "กลาง", "high": "สูง"}
 
 
@@ -75,6 +78,44 @@ def rmse_at_lead(step_metrics: Optional[Mapping[str, float]], lead_min: float) -
         if lead_min <= x1:
             return y0 + (y1 - y0) * (lead_min - x0) / (x1 - x0)
     return points[-1][1]
+
+
+def daylight_rmse_metrics(meta: Mapping) -> Optional[dict[str, float]]:
+    """RMSE per lead time on the daylight part of the model's test set, with the keys rmse_at_lead reads.
+
+    Models stored before the daylight metrics existed only have the all-hours values, which are used then.
+    """
+    day = {
+        key.replace("test_day_rmse_", "test_rmse_"): float(value)
+        for key, value in (meta.get("daylight_metrics") or {}).items()
+        if key.startswith("test_day_rmse_plus_")
+    }
+    return day or (dict(meta.get("step_metrics") or {}) or None)
+
+
+def uncertainty_band(
+    ghi: Sequence[float],
+    clearsky: Sequence[float],
+    metrics: Optional[Mapping[str, float]],
+    step_minutes: int = 10,
+) -> Optional[tuple[list[float], list[float]]]:
+    """Typical error range of the forecast: GHI(t) -/+ RMSE(lead time), kept inside [0, 1.2 x clear sky].
+
+    RMSE is the model's test error at that lead time, so about two thirds of the test cases fall inside.
+    A point sensor under broken cloud swings more than that. None when the model has no error metrics.
+    """
+    lower, upper = [], []
+    for i, (g, cs) in enumerate(zip(ghi, clearsky)):
+        if cs < NIGHT_CLEARSKY_GHI:
+            lower.append(0.0)
+            upper.append(0.0)
+            continue
+        rmse = rmse_at_lead(metrics, (i + 1) * step_minutes)
+        if rmse is None:
+            return None
+        lower.append(round(max(0.0, g - rmse), 2))
+        upper.append(round(max(g, min(g + rmse, UNCERTAINTY_MAX_CLEARSKY_RATIO * cs)), 2))
+    return lower, upper
 
 
 def evaluate(

@@ -85,6 +85,8 @@ async def save_model_prediction(
         sat_ghi_loss_pct=_floats(result.get("sat_ghi_loss_pct")),
         sat_ghi_loss_now_pct=float(loss_now) if loss_now is not None else None,
         target_profile_kw=_floats(result.get("target_profile_kw")),
+        ghi_forecast_lower=_floats(result.get("ghi_forecast_lower")),
+        ghi_forecast_upper=_floats(result.get("ghi_forecast_upper")),
         satellite_status=result.get("satellite_status"),
         satellite_lag_minutes=result.get("satellite_lag_minutes"),
         alert_level=str(result["alert_level"]),

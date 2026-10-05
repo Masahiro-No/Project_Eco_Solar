@@ -444,6 +444,8 @@
     "fr_pending": "not saved yet",
     "fr_saved_bad": "rejected",
     "fr_saved_ok": "checked, usable",
-    "fr_saved": "{saved} frames saved ({rejected} not usable, {accepted} usable); applies to the next retrain"
+    "fr_saved": "{saved} frames saved ({rejected} not usable, {accepted} usable); applies to the next retrain",
+    "band_legend": "Typical error range (± RMSE)",
+    "help_band": "The shaded band is the forecast plus and minus the model's error (RMSE) at that lead time, from the daytime part of the test set. About two thirds of the real values fall inside; a single-point sensor under broken cloud can fall outside."
   }
 }

@@ -16,6 +16,8 @@ export type GhiChartPoint = {
   cloudPct: number | null;
   /** Expected loss of GHI against clear sky from the satellite branch, in % */
   lossPct: number | null;
+  /** Typical error range [lower, upper] of the blended forecast; null when the model has no error metrics */
+  band: [number, number] | null;
 };
 
 export type PowerChartPoint = {
@@ -23,6 +25,8 @@ export type PowerChartPoint = {
   gen: number;
   /** Target at this time: follows the sun, never above P_target */
   target: number;
+  /** Typical error range [lower, upper] of P_gen */
+  band: [number, number] | null;
 };
 
 export type ForecastContextType = {
@@ -60,6 +64,14 @@ const ForecastContext = createContext<ForecastContextType>({
   chartGhiData: [],
   chartPowerData: [],
 });
+
+/** Error range of step i, scaled (1 for GHI, kW per W/m² for power). */
+function bandOf(p: PredictionResultData, i: number, scale: number): [number, number] | null {
+  const lo = p.ghi_forecast_lower?.[i];
+  const hi = p.ghi_forecast_upper?.[i];
+  if (lo === undefined || lo === null || hi === undefined || hi === null) return null;
+  return [Math.round(lo * scale), Math.round(hi * scale)];
+}
 
 /** How often the dashboard re-reads the latest prediction (the backend produces one every 10 min). */
 const POLL_INTERVAL_MS = 60_000;
@@ -167,6 +179,7 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
         weightPct: w === undefined || w === null ? null : Math.round(w * 100),
         cloudPct: c === undefined || c === null ? null : Math.round(c),
         lossPct: loss === undefined || loss === null ? null : Math.round(loss),
+        band: bandOf(prediction, i, 1),
       };
     });
   }, [prediction]);
@@ -175,9 +188,11 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
     if (!prediction || !selectedStation) return [];
     const base = prediction.data_time || prediction.predicted_at;
     // Same formula as the backend decision rules: P_gen = A * eta * GHI / 1000, on the blended GHI
+    const kwPerWm2 = (selectedStation.panel_area * selectedStation.efficiency) / 1000;
     return prediction.ghi_forecast_curve.map((ghi, i) => ({
       t: forecastTimeLabel(base, i + 1),
-      gen: Math.round((selectedStation.panel_area * selectedStation.efficiency * ghi) / 1000),
+      gen: Math.round(kwPerWm2 * ghi),
+      band: bandOf(prediction, i, kwPerWm2),
       target: Math.round(prediction.target_profile_kw?.[i] ?? prediction.target_power_kw),
     }));
   }, [prediction, selectedStation]);

@@ -52,6 +52,7 @@ export default function ForecastPage() {
                   <th className="px-3 py-2 text-left">{t('th_time')}</th>
                   <th className="px-3 py-2">{t('ghi_lstm')} (W/m²)</th>
                   <th className="px-3 py-2">{t('ghi_blend')} (W/m²)</th>
+                  <th className="px-3 py-2">{t('band_legend')}</th>
                   <th className="px-3 py-2">{t('ghi_weight')}</th>
                   <th className="px-3 py-2">{t('cloud_cover')}</th>
                   <th className="px-3 py-2">{t('sat_loss_col')}</th>
@@ -66,6 +67,7 @@ export default function ForecastPage() {
                       <td className="px-3 py-1.5 text-left font-medium text-ink">{p.t}</td>
                       <td className="px-3 py-1.5">{p.lstm ?? '—'}</td>
                       <td className="px-3 py-1.5 font-semibold text-ink">{p.blend}</td>
+                      <td className="px-3 py-1.5">{p.band ? `${p.band[0]}–${p.band[1]}` : '—'}</td>
                       <td className="px-3 py-1.5">{p.weightPct === null ? '—' : `${p.weightPct}%`}</td>
                       <td className="px-3 py-1.5">{p.cloudPct === null ? '—' : `${p.cloudPct}%`}</td>
                       <td className="px-3 py-1.5">

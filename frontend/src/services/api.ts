@@ -105,6 +105,9 @@ export interface PredictionResultData {
   sat_ghi_loss_now_pct?: number | null;
   /** Target per step: the smaller of P_target and a share of the clear-sky output at that time */
   target_profile_kw?: number[] | null;
+  /** Typical error range of the GHI forecast: forecast -/+ the model's RMSE at that lead time */
+  ghi_forecast_lower?: number[] | null;
+  ghi_forecast_upper?: number[] | null;
   cloud_impact_level?: CloudImpactLevel | null;
   satellite_status?: SatelliteStatus | null;
   satellite_lag_minutes?: number | null;

@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
 import { ALERT_UI, CLOUD_UI, TONE_CLASS } from '@/lib/levels';
 
-type TermKey = 'help_ghi' | 'help_pgen' | 'help_ptarget' | 'help_dp' | 'help_reserve' | 'help_ghi_blend' | 'help_cloud' | 'help_lstm' | 'help_convlstm';
+type TermKey = 'help_ghi' | 'help_pgen' | 'help_ptarget' | 'help_dp' | 'help_reserve' | 'help_ghi_blend' | 'help_cloud' | 'help_lstm' | 'help_convlstm' | 'help_band';
 
 const TERMS: { term: string; key: TermKey }[] = [
   { term: 'GHI', key: 'help_ghi' },
@@ -18,6 +18,7 @@ const TERMS: { term: string; key: TermKey }[] = [
   { term: 'ConvLSTM', key: 'help_convlstm' },
   { term: 'GHI (blend)', key: 'help_ghi_blend' },
   { term: 'Cloud cover', key: 'help_cloud' },
+  { term: '± RMSE', key: 'help_band' },
 ];
 
 type AlertDescKey = 'help_alert_night' | 'help_alert_normal' | 'help_alert_watch' | 'help_alert_warning' | 'help_alert_critical';

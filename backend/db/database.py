@@ -56,6 +56,8 @@ def _ensure_prediction_columns(sync_conn) -> None:
         "sat_ghi_loss_pct": "JSON",
         "sat_ghi_loss_now_pct": "FLOAT",
         "target_profile_kw": "JSON",
+        "ghi_forecast_lower": "JSON",
+        "ghi_forecast_upper": "JSON",
         "satellite_status": "VARCHAR(30)",
         "satellite_lag_minutes": "INTEGER",
         "is_night": "BOOLEAN",

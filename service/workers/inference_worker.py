@@ -494,6 +494,7 @@ async def run_inference(
         )
         if d.is_night and sat["status"] in ("ok", "shifted", "observed_only"):
             sat["status"] = "night"
+        band = decision.uncertainty_band(ghi_blend, clearsky, decision.daylight_rmse_metrics(meta), STEP_MINUTES)
         logger.info(
             f"[Blend] w0={BLEND_W0} tau={BLEND_TAU_MIN} min; satellite {sat['status']}; "
             f"GHI {min(ghi_blend):.1f}-{max(ghi_blend):.1f} W/m2"
@@ -509,6 +510,8 @@ async def run_inference(
             "forecast_horizon_hours": n_steps * STEP_MINUTES // 60,
             "ghi_forecast_curve": ghi_blend,
             "ghi_forecast_lstm_raw": ghi_lstm,
+            "ghi_forecast_lower": band[0] if band else None,
+            "ghi_forecast_upper": band[1] if band else None,
             "clearsky_ghi": clearsky,
             "blend_weight": [round(w, 3) for w in weights],
             "cloud_coverage_pct": [_pct(c) for c in sat["cloud"]],

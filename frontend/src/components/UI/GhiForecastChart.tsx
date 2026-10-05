@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { SunIcon } from 'lucide-react';
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
@@ -31,6 +31,12 @@ function GhiTooltip({ active, payload, labels }: TipProps & { labels: Record<str
           {labels.lstm}: <b className="tabular-nums text-ink">{p.lstm}</b> W/m²
         </p>
       )}
+      {p.band && (
+        <p className="flex items-center gap-2">
+          <span className="h-2.5 w-4 rounded-sm" style={{ background: BLEND, opacity: 0.18 }} />
+          {labels.band}: <b className="tabular-nums text-ink">{p.band[0]}–{p.band[1]}</b> W/m²
+        </p>
+      )}
       <p className="mt-1 text-muted">
         {labels.weight}: {p.weightPct === null ? '—' : `${p.weightPct}%`} · {labels.cloud}: {p.cloudPct === null ? '—' : `${p.cloudPct}%`}
       </p>
@@ -44,8 +50,9 @@ export function GhiForecastChart() {
 
   const hasSatellite = chartGhiData.some((p) => (p.weightPct ?? 0) > 0);
   const firstWeight = chartGhiData.find((p) => p.weightPct !== null)?.weightPct ?? 0;
-  const yMax = Math.max(200, Math.ceil(Math.max(...chartGhiData.map((p) => Math.max(p.blend, p.lstm ?? 0)), 0) / 200) * 200);
-  const labels = { blend: t('ghi_blend'), lstm: t('ghi_lstm'), weight: t('ghi_weight'), cloud: t('cloud_cover') };
+  const hasBand = chartGhiData.some((p) => p.band !== null);
+  const yMax = Math.max(200, Math.ceil(Math.max(...chartGhiData.map((p) => Math.max(p.blend, p.lstm ?? 0, p.band?.[1] ?? 0)), 0) / 200) * 200);
+  const labels = { blend: t('ghi_blend'), lstm: t('ghi_lstm'), weight: t('ghi_weight'), cloud: t('cloud_cover'), band: t('band_legend') };
 
   return (
     <Panel
@@ -60,7 +67,12 @@ export function GhiForecastChart() {
           <span className="flex items-center gap-1.5 whitespace-nowrap">
             <span className="w-5 border-t-2 border-dashed" style={{ borderColor: LSTM }} /> {t('ghi_lstm')}
           </span>
-          <InfoTip text={t('help_ghi_blend')} align="right" />
+          {hasBand && (
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
+              <span className="h-2.5 w-5 rounded-sm" style={{ background: BLEND, opacity: 0.18 }} /> {t('band_legend')}
+            </span>
+          )}
+          <InfoTip text={`${t('help_ghi_blend')} ${t('help_band')}`} align="right" />
         </div>
       }
     >
@@ -78,14 +90,15 @@ export function GhiForecastChart() {
           </p>
           <div className="min-h-0 flex-1">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartGhiData} margin={{ top: 8, right: 10, left: -14, bottom: -4 }}>
+              <ComposedChart data={chartGhiData} margin={{ top: 8, right: 10, left: -14, bottom: -4 }}>
                 <CartesianGrid stroke="#eef2f7" vertical={false} />
                 <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} interval={2} />
                 <YAxis domain={[0, yMax]} tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false} />
                 <Tooltip content={<GhiTooltip labels={labels} />} cursor={{ stroke: '#94a3b8', strokeWidth: 1 }} />
+                <Area dataKey="band" stroke="none" fill={BLEND} fillOpacity={0.14} activeDot={false} isAnimationActive={false} connectNulls />
                 <Line dataKey="lstm" stroke={LSTM} strokeWidth={2} strokeDasharray="6 5" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls />
                 <Line dataKey="blend" stroke={BLEND} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
-              </LineChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         </>

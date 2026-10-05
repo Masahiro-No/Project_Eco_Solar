@@ -65,6 +65,8 @@ def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:
         sat_ghi_loss_pct=pred.sat_ghi_loss_pct,
         sat_ghi_loss_now_pct=pred.sat_ghi_loss_now_pct,
         target_profile_kw=pred.target_profile_kw,
+        ghi_forecast_lower=pred.ghi_forecast_lower,
+        ghi_forecast_upper=pred.ghi_forecast_upper,
         cloud_impact_level=level,
         satellite_status=pred.satellite_status,
         satellite_lag_minutes=pred.satellite_lag_minutes,
