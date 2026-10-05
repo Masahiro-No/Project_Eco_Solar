@@ -8,7 +8,6 @@ Usage (api container):
 """
 import asyncio
 import json
-import math
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +17,7 @@ from arq.jobs import Job
 from sqlalchemy import select
 
 from api.inference.service import INFERENCE_QUEUE, deployed_lookback_steps
+from api.inference.weather_grid import build_feature_window
 from api.ingestion.model import WeatherHistory
 from api.stations.model import Station
 from core.config import settings
@@ -31,25 +31,10 @@ async def main(station_id: str, at_iso: str) -> None:
         station = (await db.execute(select(Station).where(Station.id == station_id))).scalar_one()
         rows = (await db.execute(
             select(WeatherHistory).where(WeatherHistory.station_id == station_id, WeatherHistory.timestamp <= at)
-            .order_by(WeatherHistory.timestamp.desc()).limit(lookback)
+            .order_by(WeatherHistory.timestamp.desc()).limit(lookback * 2 + 12)
         )).scalars().all()
-    rows = list(reversed(rows))
-    assert len(rows) == lookback, f"only {len(rows)} rows"
-    th = timezone(timedelta(hours=7))
-    feats = []
-    for r in rows:
-        t = r.timestamp.astimezone(th)
-        m = t.hour * 60 + t.minute
-        doy = t.timetuple().tm_yday
-        feats.append([
-            float(r.ghi), float(r.dni), float(r.dhi or 0.0), float(r.clearsky_ghi), float(r.solar_zenith_angle),
-            max(0.0, min(1.0, float(r.clearsky_index))), float(r.temperature), float(r.relative_humidity),
-            float(r.surface_pressure or 1008.0), float(r.wind_speed),
-            math.sin(2 * math.pi * m / 1440), math.cos(2 * math.pi * m / 1440),
-            math.sin(2 * math.pi * doy / 365.25), math.cos(2 * math.pi * doy / 365.25),
-            math.sin(2 * math.pi * (t.month - 1) / 12), math.cos(2 * math.pi * (t.month - 1) / 12),
-        ])
-    data_time = rows[-1].timestamp
+    feats, data_time, reason = build_feature_window(list(reversed(rows)), lookback)  # same grid as the live pipeline
+    assert reason is None, reason
     pool = await create_pool(RedisSettings(host=settings.redis_host, port=settings.redis_port))
     job_id = f"daytest-{station_id}-{int(datetime.now(timezone.utc).timestamp())}"
     await pool.enqueue_job(

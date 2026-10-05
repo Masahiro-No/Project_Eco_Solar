@@ -364,7 +364,44 @@ def check_frame_review():
     print("PASS frame review (night skipped, blank / partial / jump hints)")
 
 
+def check_weather_grid():
+    """The LSTM input window is on the 10-minute grid (pure function)."""
+    from api.inference.weather_grid import build_feature_window, slot_of
+
+    def row(ts, ghi=500.0, **kw):
+        base = dict(timestamp=ts, ghi=ghi, dni=300.0, dhi=None, clearsky_ghi=800.0, solar_zenith_angle=30.0,
+                    temperature=30.0, relative_humidity=70.0, surface_pressure=None, wind_speed=2.0)
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    t0 = datetime(2026, 10, 5, 3, 0, tzinfo=timezone.utc)
+    assert slot_of(t0 + timedelta(minutes=15)) == t0 + timedelta(minutes=20)        # :15 -> :20 (เหมือนตอนเทรน)
+    assert slot_of(t0 + timedelta(minutes=14)) == t0 + timedelta(minutes=10)
+
+    # แถวปนกันแบบในฐานข้อมูลจริง: ทุก 10 นาที + แถว :15 และ :45
+    stamps = sorted({t0 + timedelta(minutes=m) for h in range(0, 8) for m in (h * 60 + x for x in (0, 10, 15, 20, 30, 40, 45, 50))})
+    feats, end, reason = build_feature_window([row(ts, ghi=float(i)) for i, ts in enumerate(stamps)], 36)
+    assert reason is None and len(feats) == 36 and len(feats[0]) == 16
+    assert end == slot_of(stamps[-1])
+    first_slot = end - timedelta(minutes=350)                                       # 36 ช่อง = 350 นาที ไม่ใช่ 260
+    i_first = stamps.index(first_slot)
+    assert feats[0][0] == float(i_first)
+    assert feats[0][2] == 0.0 and feats[0][8] == 1008.0                             # ค่าเริ่มต้นของ DHI และความกดอากาศ
+    assert feats[0][5] == min(1.0, feats[0][0] / 800.0)                             # clearsky_ratio คิดใหม่จาก GHI
+
+    # ช่องว่าง 20 นาที: เติมเชิงเส้น; ช่องว่าง 30 นาที: ใช้ไม่ได้
+    reg = [t0 + timedelta(minutes=10 * i) for i in range(40)]
+    ok, _, reason = build_feature_window([row(ts, ghi=float(i)) for i, ts in enumerate(reg) if i not in (20, 21)], 36)
+    assert reason is None and ok[20 - 4][0] == 20.0 and ok[21 - 4][0] == 21.0
+    bad, _, reason = build_feature_window([row(ts) for i, ts in enumerate(reg) if i not in (20, 21, 22)], 36)
+    assert bad is None and reason.startswith("gap_in_history")
+    short, _, reason = build_feature_window([row(ts) for ts in reg[:20]], 36)
+    assert short is None and reason.startswith("insufficient_history")
+    print("PASS weather grid (10-minute slots, mixed rows, gap rules)")
+
+
 if __name__ == "__main__":
+    check_weather_grid()
     check_frame_review()
     check_time_rules()
     check_sample_files()

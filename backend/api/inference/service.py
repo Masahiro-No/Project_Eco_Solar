@@ -1,7 +1,6 @@
 import bisect
 import json
 import logging
-import math
 import os
 import uuid
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.inference.model import Prediction
 from api.inference.persistence import MODEL_SOURCE, parse_dt, save_model_prediction
+from api.inference.weather_grid import build_feature_window
 from api.inference.schema import PredictionResultData
 from api.ingestion.model import WeatherHistory
 from api.stations.model import Station
@@ -134,65 +134,27 @@ class InferenceService:
         if lookback is None:
             return ModelInput(None, None, "model_meta_unavailable (cannot read lookback_steps of the deployed LSTM)")
 
+        # weather_history has rows at :00/:10/... and at :15/:45, so fetch more rows than slots and put them
+        # on the 10-minute grid the model was trained on (see weather_grid.py)
         stmt = (
             select(WeatherHistory)
             .where(WeatherHistory.station_id == station_id)
             .order_by(WeatherHistory.timestamp.desc())
-            .limit(lookback)
+            .limit(lookback * 2 + 12)
         )
         res = await db.execute(stmt)
         records = list(reversed(res.scalars().all()))
-        if len(records) < lookback:
-            return ModelInput(None, None, f"insufficient_history ({len(records)}/{lookback} rows)")
+        if not records:
+            return ModelInput(None, None, f"insufficient_history (0/{lookback} slots)")
 
-        data_time = _as_utc(records[-1].timestamp)
-        age = datetime.now(timezone.utc) - data_time
+        newest = _as_utc(records[-1].timestamp)
+        age = datetime.now(timezone.utc) - newest
         if age > timedelta(minutes=MAX_DATA_AGE_MINUTES):
-            return ModelInput(None, data_time, f"stale_data (newest observation is {int(age.total_seconds() // 60)} min old)")
+            return ModelInput(None, newest, f"stale_data (newest observation is {int(age.total_seconds() // 60)} min old)")
 
-        span_min = (data_time - _as_utc(records[0].timestamp)).total_seconds() / 60.0
-        expected = (lookback - 1) * STEP_MINUTES
-        if abs(span_min - expected) > expected * 0.25:
-            # Not blocking, but the model expects a 10-minute grid: make the drift visible.
-            logger.warning(
-                "[%s] weather history spans %.0f min, expected ~%d min for %d steps of %d min",
-                station_id, span_min, expected, lookback, STEP_MINUTES,
-            )
-
-        features: list[list[float]] = []
-        th_tz = timezone(timedelta(hours=7))  # Thailand Local Time (UTC+7)
-
-        for r in records:
-            dt_local = _as_utc(r.timestamp).astimezone(th_tz)
-            minute_of_day = dt_local.hour * 60 + dt_local.minute
-            hour_sin = math.sin(2 * math.pi * minute_of_day / 1440.0)
-            hour_cos = math.cos(2 * math.pi * minute_of_day / 1440.0)
-            day_of_year = dt_local.timetuple().tm_yday
-            day_sin = math.sin(2 * math.pi * day_of_year / 365.25)
-            day_cos = math.cos(2 * math.pi * day_of_year / 365.25)
-            month_sin = math.sin(2 * math.pi * (dt_local.month - 1) / 12.0)
-            month_cos = math.cos(2 * math.pi * (dt_local.month - 1) / 12.0)
-            clearsky_ratio = max(0.0, min(1.0, float(r.clearsky_index)))
-
-            features.append([
-                float(r.ghi),
-                float(r.dni),
-                float(r.dhi or 0.0),
-                float(r.clearsky_ghi),
-                float(r.solar_zenith_angle),
-                clearsky_ratio,
-                float(r.temperature),
-                float(r.relative_humidity),
-                float(r.surface_pressure or 1008.0),
-                float(r.wind_speed),
-                round(hour_sin, 6),
-                round(hour_cos, 6),
-                round(day_sin, 6),
-                round(day_cos, 6),
-                round(month_sin, 6),
-                round(month_cos, 6),
-            ])
-
+        features, data_time, reason = build_feature_window(records, lookback)
+        if reason:
+            return ModelInput(None, data_time, reason)
         return ModelInput(features, data_time)
 
     # ------------------------------------------------------------------
