@@ -16,3 +16,10 @@ mlflow.db
 
 # local secrets for docker compose
 .env
+
+# model backups made by the retrain jobs stay local
+model/**/backups/
+*.candidate
+
+# stale local dev database
+solardss.db

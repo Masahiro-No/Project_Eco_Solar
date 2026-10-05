@@ -75,6 +75,8 @@ services:
       LOG_DIR: /logs
     volumes:
       - ./logs:/logs
+      # keeps Label Studio's generated SECRET_KEY: without it every recreate invalidates the API token in .env
+      - label-studio-data:/label-studio/data
     command: sh -c "label-studio start 2>&1 | tee /logs/label_studio.log"
     logging:
       driver: "json-file"
@@ -126,7 +128,7 @@ services:
       minio_endpoint: "minio:9000"
       redis_host: "redis"
       redis_port: "6379"
-      ENABLE_RETRAIN: "false"
+      ENABLE_RETRAIN: "${ENABLE_RETRAIN:-false}"  # one switch for LSTM and ConvLSTM retraining (.env)
       # admin account (private zone); the password lives in the git-ignored .env
       admin_email: "${ADMIN_EMAIL:-admin@solardss.io}"
       admin_password: "${ADMIN_PASSWORD:-}"
@@ -198,7 +200,7 @@ services:
       MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
       AWS_ACCESS_KEY_ID: "admin"
       AWS_SECRET_ACCESS_KEY: "password"
-      ENABLE_RETRAIN: "false"
+      ENABLE_RETRAIN: "${ENABLE_RETRAIN:-false}"  # one switch for LSTM and ConvLSTM retraining (.env)
       LOG_DIR: /workspace/logs
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "trainer-worker"
@@ -208,6 +210,12 @@ services:
       LABEL_STUDIO_URL: "http://label-studio:8080"
       LABEL_STUDIO_API_KEY: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
       RETRAIN_MAX_REGRESSION_RATIO: "1.0"
+      # --- ConvLSTM retrain on real satellite frames (starts when a batch of new daytime scans is complete) ---
+      CONVLSTM_RETRAIN_THRESHOLD: "50"
+      CONVLSTM_RETRAIN_EPOCHS: "6"
+      CONVLSTM_LOOKBACK_DAYS: "5"
+      CONVLSTM_MAX_TRAIN_SEQUENCES: "300"
+      CONVLSTM_MAX_REGRESSION_RATIO: "1.0"
     depends_on:
       redis:
         condition: service_healthy
@@ -333,6 +341,9 @@ services:
       redis_port: 6379
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "ingestion-worker"
+      # the ingestion round also starts the ConvLSTM retrain when this many new daytime scans arrived
+      ENABLE_RETRAIN: "${ENABLE_RETRAIN:-false}"
+      CONVLSTM_RETRAIN_THRESHOLD: "50"
       OTEL_RESOURCE_ATTRIBUTES: "service.version=0.2.0"
       LOG_DIR: "/workspace/logs"
       PYTHONPATH: "/workspace:/workspace/backend:/workspace/service"
@@ -448,6 +459,7 @@ services:
 volumes:
   redis-data:
   postgresql-data:
+  label-studio-data:
   minio_data:
   prometheus-data:
   loki-data:

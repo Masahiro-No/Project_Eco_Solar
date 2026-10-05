@@ -1,73 +1,205 @@
-# AI Ecosystem Workspace
+# SolarDSS — Solar Power Forecasting & Decision Support System
 
-## Overview
+ระบบพยากรณ์กำลังผลิตไฟฟ้าจากแสงอาทิตย์ล่วงหน้า 3 ชั่วโมง (ทุก 10 นาที) และแนะนำการสำรองกำลังไฟฟ้าให้ผู้ควบคุมระบบ
+ใช้ข้อมูลจริงทั้งหมด: สภาพอากาศจาก Open-Meteo, ภาพดาวเทียม Himawari Band 03 จาก NICT และค่า GHI ที่วัดจริงซึ่งผู้ดูแลอัปโหลดเป็นไฟล์
+ไม่มีข้อมูลจำลองในระบบ ถ้าข้อมูลส่วนใดขาด หน้าจอจะแสดงว่าไม่มีข้อมูลแทนการแสดงค่าทดแทน
 
-โปรเจกต์นี้เป็นสถาปัตยกรรมแบบ **Monorepo + Multi-Service** ที่ออกแบบมาเพื่อรองรับระบบ AI Ecosystem ครบวงจร แบ่งการทำงานออกเป็นเซิร์ฟเวอร์หลัก (Central API Server) และระบบประมวลผลเบื้องหลัง (Background Worker Services) ร่วมกับระบบโครงสร้างพื้นฐาน (Infrastructure Services)
+## 1. ภาพรวมการทำงาน
 
-![Architecture Overview](diagrams/overview.png)
-
-## Infrastructure & Components
-
-ระบบประกอบด้วยส่วนประกอบสำคัญดังนี้:
-
-| Component           | Technology   | Description                                                                         |
-| ------------------- | ------------ | ----------------------------------------------------------------------------------- |
-| **Backend API**     | FastAPI      | Central API Server จัดการ Business Logic, Auth, Storage, Label Studio และ Job Queue |
-| **Worker Service**  | ARQ (Python) | Background Worker ดึงงานจาก Redis ไปประมวลผลแบบ Asynchronous                        |
-| **Database**        | PostgreSQL   | ระบบฐานข้อมูลเชิงสัมพันธ์หลักสำหรับเก็บข้อมูลผู้ใช้และระบบ                          |
-| **In-Memory Store** | Redis        | ใช้สำหรับ ARQ Job Queue และ Cache                                                   |
-| **Object Storage**  | MinIO        | S3-Compatible Object Storage สำหรับจัดเก็บไฟล์และข้อมูลมัลติมีเดีย                  |
-| **Data Labeling**   | Label Studio | แพลตฟอร์มสำหรับทำ Data Annotation / Labeling                                        |
-
-## Project Structure
-
-```text
-AI_workspace/
-├── backend/                  # Central FastAPI Application (Layered Architecture)
-│   ├── api/                  # Feature Modules (auth, users, storage, label_studio, jobs)
-│   ├── core/                 # App Configurations & Settings
-│   ├── db/                   # Database Session & Base Models
-│   ├── scripts/              # Helper Scripts (e.g. openapi_to_csv.py)
-│   └── main.py               # FastAPI Entrypoint
-├── service/                  # ARQ Background Worker Service
-│   ├── workers/              # Worker task definitions
-│   └── main.py               # Worker configuration settings
-├── diagrams/                 # Architecture diagrams (overview.drawio, overview.png)
-└── compose.yml               # Docker Compose configuration for Infrastructure
+```mermaid
+flowchart LR
+  subgraph EXT[แหล่งข้อมูลภายนอก]
+    OM[Open-Meteo<br/>สภาพอากาศ 10 นาที]
+    NICT[NICT Himawari<br/>Band 03 ทุก 10 นาที]
+    GT[ไฟล์ GHI ที่วัดจริง<br/>xlsx / csv]
+  end
+  subgraph PRIV[Private zone]
+    ING[ingestion-worker<br/>ทุก 10 นาที]
+    INF[inference-worker<br/>LSTM + ConvLSTM + blend + decision]
+    TRN[trainer-worker<br/>retrain LSTM / ConvLSTM]
+    PG[(PostgreSQL)]
+    S3[(MinIO)]
+    LS[Label Studio]
+    ML[MLflow]
+    OBS[Prometheus / Loki / Tempo / Grafana]
+  end
+  subgraph PUB[Public zone]
+    API[FastAPI :8000]
+    WEB[Next.js :3000]
+  end
+  OM --> ING --> PG
+  NICT --> INF
+  ING -- คิว Redis --> INF --> PG
+  INF <--> S3
+  GT --> WEB --> API --> LS
+  API <--> PG
+  LS --> TRN
+  S3 --> TRN --> S3
+  TRN --> ML
+  API --> WEB
 ```
 
-## Getting Started
+ทุก 10 นาที `ingestion-worker` ดึงสภาพอากาศของทุกสถานีและเติมช่องที่ขาด แล้วสั่ง `inference-worker` ให้พยากรณ์ทีละสถานี:
 
-### 1. Start Infrastructure Services
+1. LSTM (ONNX) พยากรณ์ GHI 18 ก้าว จากข้อมูลย้อนหลัง 36 ก้าว (6 ชั่วโมง) 16 ฟีเจอร์
+2. ภาพดาวเทียมจริง 12 เฟรมล่าสุดเข้า ConvLSTM (ONNX) ได้ภาพอีก 18 เฟรม แล้วคิดสัดส่วนเมฆในกรอบรอบสถานี
+3. รวมผลสองโมเดลด้วยน้ำหนักที่ลดลงตามระยะเวลาพยากรณ์
+4. คำนวณ P_gen จาก GHI ที่รวมแล้ว เทียบกับเป้า และเลือกระดับการเตือนจากตารางกฎ
+5. บันทึกลงตาราง `predictions` หน้าเว็บอ่านผลล่าสุดทุก 1 นาที
 
-เริ่มรันบริการ PostgreSQL, Redis, MinIO และ Label Studio ผ่าน Docker Compose:
+## 2. การตัดสินใจทางเทคนิค
+
+### 2.1 สัดส่วนเมฆในกรอบพื้นที่ (แทน cloud tracking)
+
+- กรอบพื้นที่ (AOI) คือ 5×5 พิกเซลกลางภาพครอป 64×64 ของแต่ละสถานี ที่ตำแหน่งสถานี 1 พิกเซลกว้างประมาณ 15 × 11 กม. กรอบจึงคลุมประมาณ 78 × 55 กม.
+- สัดส่วนเมฆ C = จำนวนพิกเซลที่เป็นเมฆ ÷ 25 โดยพิกเซลเป็นเมฆเมื่อ ความสว่าง ÷ cos(มุมซีนิทของดวงอาทิตย์) ≥ 0.25
+- เฟรมที่ดวงอาทิตย์ต่ำ (cos ซีนิท < 0.30) ไม่ใช้ เพราะฟ้าใสก็ดูสว่างเท่าเมฆ
+- แปลงเป็นดัชนีฟ้าใสด้วย Kasten & Czeplak (1980): k = 1 − 0.75 · C^3.4
+- ระดับผลกระทบ: ต่ำ (GHI ลด < 10%, C < 55%), กลาง (10–30%, C 55–76%), สูง (> 30%, C > 76%)
+
+โค้ด: [service/workers/cloud_coverage.py](service/workers/cloud_coverage.py)
+
+### 2.2 สมการรวมผลสองโมเดล
+
+```
+GHI_blend(t) = w(t) · k(t) · GHI_clearsky(t) + (1 − w(t)) · GHI_lstm(t)
+w(t)         = 0.9 · exp(−t / 102)        t = นาทีนับจากเฟรมดาวเทียมจริงล่าสุด
+```
+
+ภาพดาวเทียมเห็นเมฆจริง จึงเชื่อมากในช่วงใกล้ (w ≈ 0.8 ที่ 10 นาที, 0.5 ที่ 60 นาที) เมื่อไกลออกไปตำแหน่งเมฆคาดเดาได้ยาก น้ำหนักจึงย้ายไปที่แนวโน้มของ LSTM
+กลางคืน (GHI ฟ้าใส < 10 W/m²) ให้ GHI = 0 โดยไม่ใช้ผลจากโมเดล กราฟบนหน้าเว็บแสดงทั้งเส้นที่รวมแล้วและเส้น LSTM อย่างเดียว
+
+โค้ด: [service/workers/ghi_blend.py](service/workers/ghi_blend.py)
+
+### 2.3 ข้อมูลขาด
+
+| ข้อมูล | กรณี | วิธี |
+|---|---|---|
+| ภาพดาวเทียม | ชุด 12 เฟรมล่าสุดไม่ครบ | ถอยไปใช้ชุดที่ครบ ถอยได้ไม่เกิน 30 นาที |
+| ภาพดาวเทียม | ไม่มีชุดที่ครบ | น้ำหนักภาพดาวเทียม = 0 ใช้ LSTM อย่างเดียว และหน้าเว็บบอกเหตุผล |
+| ภาพดาวเทียม | NICT ส่งภาพดำทั้งภาพตอนกลางวัน (ยังประมวลผลไม่เสร็จ หรือรอบที่ Himawari ไม่สแกน คือ 02:40 และ 14:40 UTC ทุกวัน) | ถือว่าไม่มีภาพของเวลานั้น ไม่เก็บลง cache และไม่ใช้เทรน |
+| สภาพอากาศ | ช่องว่างไม่เกิน 20 นาที | linear interpolation |
+| สภาพอากาศ | ช่องว่างยาวกว่านั้น | ดึงย้อนหลังจาก Open-Meteo ในรอบถัดไป ถ้ายังไม่ครบ ไม่พยากรณ์สถานีนั้น |
+
+ไม่มีการสร้างภาพหรือค่าทดแทน
+
+### 2.4 ความยาวข้อมูลย้อนหลังของ LSTM (time steps)
+
+ทดลองบนชุดทดสอบปี 2020 (NSRDB หาดใหญ่) วัดเฉพาะช่วงกลางวัน
+
+| ย้อนหลัง | ชั่วโมง | RMSE กลางวัน (W/m²) | MAE กลางวัน | RMSE ที่ +10 นาที | RMSE ที่ +180 นาที |
+|---:|---:|---:|---:|---:|---:|
+| 36 | 6 | 120.20 | 82.60 | 76.91 | 137.08 |
+| 48 | 8 | 120.15 | 80.91 | 76.87 | 137.47 |
+| 72 | 12 | 120.13 | 81.76 | 76.79 | 137.34 |
+| 144 | 24 | 120.18 | 80.53 | 76.40 | 136.93 |
+
+ผลต่างกันไม่ถึง 0.1% จึงเลือกค่าสั้นที่สุดคือ 36 ก้าว (6 ชั่วโมง) ซึ่งต้องการข้อมูลย้อนหลังน้อยกว่าและเริ่มพยากรณ์สถานีใหม่ได้เร็วกว่า
+รันซ้ำได้ด้วย `python -m service.training.train --ablation 36 48 72 144` ผลอยู่ใน MLflow experiment `solar_ghi_lstm_lookback_ablation`
+
+### 2.5 กฎการตัดสินใจ
+
+P_gen(t) = พื้นที่แผง × ประสิทธิภาพ × GHI_blend(t) ÷ 1000 และ ΔP = เป้า − P_gen ที่ขาดมากที่สุดใน 3 ชั่วโมง (เฉพาะช่วงกลางวัน)
+
+| | เมฆต่ำ | เมฆกลาง | เมฆสูง |
+|---|---|---|---|
+| P_gen ถึงเป้าตลอดช่วง | ปกติ | เฝ้าระวัง | เตือน |
+| มีช่วงที่ต่ำกว่าเป้า | เตือน | เตือน | วิกฤต |
+
+กำลังสำรองที่แนะนำ: ถึงเป้าแต่เมฆสูง = ค่ากันความคลาดเคลื่อน, ต่ำกว่าเป้าและเมฆต่ำ = ΔP, ต่ำกว่าเป้าและเมฆกลางหรือสูง (หรือไม่มีข้อมูลดาวเทียม) = ΔP + ค่ากันความคลาดเคลื่อน
+ค่ากันความคลาดเคลื่อน = A·η·RMSE(ระยะพยากรณ์) ÷ 1000 โดย RMSE มาจากผลทดสอบของโมเดลที่ใช้งานอยู่ กลางคืนเป็นสถานะแยกและไม่นับเป็นการเตือน
+
+โค้ด: [service/workers/decision.py](service/workers/decision.py)
+
+## 3. การ retrain
+
+เปิดปิดด้วย `ENABLE_RETRAIN` ใน `.env` (ค่าเดียวใช้กับทั้งสองโมเดล) ทั้งสองแบบสำรองไฟล์เดิมก่อนแทนที่ และแทนที่เฉพาะเมื่อโมเดลใหม่ไม่แย่กว่าเดิมบนข้อมูลที่กันไว้ตรวจ
+
+| | LSTM | ConvLSTM |
+|---|---|---|
+| เริ่มเมื่อ | ผู้ดูแลบันทึกค่า GHI จริง (หน้า Label ค่าจริง) | มีภาพดาวเทียมกลางวันใหม่ครบ 50 เวลาสแกน |
+| ข้อมูล | `weather_history` 45 วันล่าสุด โดยใช้ค่าที่วัดจริงทับในช่องที่มี label | ภาพจริงใน MinIO 5 วันล่าสุด ตัดเป็นชุด 30 เฟรมต่อเนื่อง (12 → 18) |
+| น้ำหนักเริ่มต้น | จากไฟล์ ONNX ที่ใช้งานอยู่ | จากไฟล์ ONNX ที่ใช้งานอยู่ |
+| เกณฑ์ผ่าน | MAE บนชุดตรวจไม่สูงกว่าเดิม | MSE บนชุดตรวจ (ช่วงเวลาล่าสุด) ไม่สูงกว่าเดิม |
+| ผลรอบล่าสุด (5 ต.ค. 2026) | v1.1.0 → v1.1.1, MAE 33.5 → 25.3 W/m² (452 windows) | v1.0.0 → v1.0.1, MSE 0.0117 → 0.0088, SSIM 0.50 → 0.57, ความคลาดเคลื่อนของ % เมฆในกรอบ 20.9 → 19.8 จุด (39 ชุด, 654 เฟรม) |
+
+label ที่บอกว่ามีแดดตอนกลางคืนจะไม่ถูกใช้ ผลทุกรอบบันทึกใน MLflow (`solar_lstm_retrain`, `solar_convlstm_retrain`)
+ตัวเลขข้างบนวัดบนข้อมูล 4–6 วันล่าสุดของระบบนี้ จึงบอกได้ว่าโมเดลปรับเข้ากับข้อมูลช่วงนี้ดีขึ้น ยังไม่ใช่ผลระยะยาว
+
+```bash
+docker exec trainer-worker sh -c 'cd /workspace && python -m service.training.retrain_convlstm --status'
+```
+
+## 4. โซน Public และ Private
+
+| โซน | ใครเข้าได้ | ประกอบด้วย |
+|---|---|---|
+| Public | ผู้ใช้ที่ล็อกอิน role `operator` | เว็บ :3000 (แดชบอร์ด พยากรณ์ สนับสนุนการตัดสินใจ แจ้งเตือน สถานี คู่มือ) และ API อ่านข้อมูล :8000 |
+| Private (ผู้ดูแล) | role `admin` | หน้า Label ค่าจริง, แก้ไขสถานีและเป้ากำลังผลิต, API สั่งงาน (jobs, storage, ingestion trigger) |
+| Private (นักพัฒนา) | เฉพาะเครื่อง server (`127.0.0.1`) | PostgreSQL 5432, Redis 6379, MinIO 9000/9001, Label Studio 8080, MLflow 5000, Grafana 3002, Prometheus 9090, Loki 3100, Tempo 3200 |
+
+API ตรวจ token และ role ที่ทุก endpoint ของข้อมูลระบบ ผู้ที่ไม่ล็อกอินได้ 401 และ operator ที่เรียก endpoint ของผู้ดูแลได้ 403
+
+## 5. เริ่มใช้งาน
+
+```bash
+cp .env.example .env
+```
+
+แก้ `.env`:
+
+- `LABEL_STUDIO_API_KEY` — Personal Access Token จาก Label Studio (Account & Settings)
+- `ADMIN_PASSWORD` — รหัสผ่านบัญชีผู้ดูแล (อย่างน้อย 8 ตัว) บัญชีถูกสร้างตอน API เริ่มทำงาน
+- `ENABLE_RETRAIN` — `true` เพื่อให้ retrain อัตโนมัติ
 
 ```bash
 docker compose up -d
 ```
 
-### 2. Run Backend API Server
+เปิด http://localhost:3000 แล้วล็อกอินด้วยบัญชีผู้ดูแล (`ADMIN_EMAIL` ใน `.env`) หรือบัญชี operator ที่ระบบสร้างไว้ให้ (ค่าเริ่มต้นอยู่ใน `backend/db/database.py`) รอบพยากรณ์แรกจะมาภายใน 10 นาที
 
-ติดตั้ง dependencies และเริ่มรัน FastAPI Central Server:
+### เมื่อแก้โค้ด
+
+| ส่วนที่แก้ | คำสั่ง |
+|---|---|
+| `backend/` | `docker compose restart api` |
+| `service/workers/`, `service/training/` | `docker compose restart ingestion-worker inference-worker trainer-worker` |
+| `frontend/` | `docker compose up -d --build --no-deps frontend` |
+| ค่าใน `compose.yml` หรือ `.env` | `docker compose up -d <service>` |
+
+### ตรวจระบบ
 
 ```bash
-cd backend
-uv sync
-uv run uvicorn main:app --reload
+docker exec trainer-worker sh -c 'cd /workspace && pip install -q pytest && python -m pytest service/tests -q'
 ```
-
-### 3. Run Background Worker
-
-เปิดอีกหน้าต่าง terminal เพื่อเริ่มรัน ARQ Background Worker Process:
 
 ```bash
-# cd service
-uv sync
-arq service.main.WorkerSettings
+docker exec fastapi sh -c 'cd /app && PYTHONPATH=/app uv run python scripts/replay_inference.py ST-002 2026-10-04T07:00:00+00:00'
 ```
 
-## Documentation & API References
+คำสั่งที่สองรันโมเดลจริงกับข้อมูลจริงของเวลาที่ระบุ โดยไม่เขียนฐานข้อมูล
+Grafana มี dashboard `SolarDSS Operations` (รอบ ingestion, รอบพยากรณ์ต่อสถานี, สถานะภาพดาวเทียม, รุ่นโมเดล, log ของ worker)
 
-- **Backend Documentation**: สามารถอ่านรายละเอียดเพิ่มเติมได้ที่ [backend/README.md](backend/README.md)
-- **Worker Service Documentation**: สามารถอ่านรายละเอียดเพิ่มเติมได้ที่ [service/README.md](service/README.md)
-- **Architecture Diagram**: [diagrams/overview.png](diagrams/overview.png)
+## 6. โครงสร้างโปรเจกต์
+
+```text
+backend/            FastAPI: auth (role), stations, ingestion, inference, dashboard, label_studio, jobs
+service/workers/    ingestion_worker, inference_worker, train_worker
+                    cloud_coverage, ghi_blend, decision, solar_geometry, satellite_preprocessor, convlstm_batch
+service/training/   train (LSTM + ablation), retrain_timeseries, retrain_convlstm, features
+service/tests/      ชุดทดสอบของ pipeline พยากรณ์และ retrain
+frontend/           Next.js 15 (ไทย / อังกฤษ)
+model/              โมเดลที่ใช้งานอยู่: time-series/ (LSTM) และ convlstm/
+observability/      Prometheus, Loki, Tempo, OTel collector, Grafana provisioning
+compose.yml         ทุก service
+PLAN.md             แผนงาน ข้อกำหนด และสถานะ
+```
+
+## 7. ข้อจำกัดที่รู้
+
+- LSTM เทรนจาก NSRDB หาดใหญ่ปี 2016–2020 ส่วนข้อมูลที่ป้อนตอนใช้งานมาจาก Open-Meteo ซึ่งเป็นค่าจากแบบจำลอง เทียบกับเครื่องวัดจริงของ ST-002 วันที่ 3 ต.ค. 2026 ต่างกันเฉลี่ยประมาณ 66 W/m²
+- ค่า GHI จริงมีเฉพาะบางสถานีและต้องอัปโหลดเป็นไฟล์ จึงยังเทียบความแม่นยำกับค่าจริงได้เฉพาะวันที่มีไฟล์
+- ค่า 0.25 (เกณฑ์เมฆ), 0.9 และ 102 นาที (น้ำหนักรวมผล), 0.75 และ 3.4 (Kasten–Czeplak) เป็นค่าเริ่มต้น ปรับได้ที่ environment ของ `inference-worker` และควรปรับเมื่อมีค่าที่วัดจริงมากขึ้น
+- AOI 5×5 พิกเซลทำให้สัดส่วนเมฆเปลี่ยนทีละ 4%
+- Himawari ไม่สแกนเวลา 09:40 น. ของทุกวัน ชุด 12 เฟรมต่อเนื่องจึงขาดช่วงประมาณ 10:10–11:40 น. ช่วงนั้นระบบใช้ LSTM อย่างเดียวตามกติกาข้อมูลขาด
+- ชุดตรวจของ retrain ConvLSTM รอบแรกมาจากบ่ายวันเดียว (4 ต.ค.) ตัวเลขจึงยังแกว่ง ควรดูซ้ำเมื่อสะสมภาพได้หลายวัน

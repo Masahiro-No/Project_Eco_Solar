@@ -79,27 +79,8 @@ async def lifespan(_: FastAPI):
         # Fallback if DB not yet connected during local dev tools
         print(f"[Seed Warning] Could not seed default station: {e}")
 
-    # ── Auto Catch-up on Startup (Self-Healing Ingestion in Background) ─────────
-    import asyncio
-
-    async def run_startup_catchup():
-        try:
-            from api.ingestion.service import IngestionService
-            from api.stations.model import Station
-            from db.database import SessionLocal
-            from sqlalchemy import select
-
-            async with SessionLocal() as db:
-                st_stmt = select(Station).where(Station.is_active == True)
-                stations = (await db.execute(st_stmt)).scalars().all()
-                for st in stations:
-                    w_res = await IngestionService.auto_catchup_weather(db, station_id=st.id)
-                    s_res = await IngestionService.auto_catchup_satellite(db, station_id=st.id, count=12)
-                    print(f"[Auto Catch-up Startup] {st.id} Weather: {w_res.get('status')}, Satellite: {s_res.get('status')}")
-        except Exception as e:
-            print(f"[Auto Catch-up Warning] Could not execute startup catch-up: {e}")
-
-    asyncio.create_task(run_startup_catchup())
+    # Gaps in weather and satellite data are healed by the ingestion worker in every 10-minute round.
+    # The API does not run that catch-up itself: its downloads would block request handling after a restart.
 
     yield
 
