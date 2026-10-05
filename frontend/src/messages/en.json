@@ -520,7 +520,7 @@
     "in_chart_wind": "Wind speed",
     "in_chart_pressure": "Surface pressure",
     "in_chart_zenith": "Solar zenith angle",
-    "in_unit_wind": "km/h",
+    "in_unit_wind": "m/s",
     "in_latest_title": "Newest values fed to the model (at {time})",
     "in_col_feature": "Feature",
     "in_col_value": "Value",

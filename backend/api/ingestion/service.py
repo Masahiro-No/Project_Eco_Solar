@@ -22,6 +22,9 @@ from core.config import settings
 NICT_LATEST_JSON = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106/latest.json"
 NICT_BASE_IMG_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106"
 SATELLITE_BUCKET = "satellite-cache"
+# Open-Meteo answers in km/h unless told otherwise; the LSTM was trained on m/s (NSRDB), so every request asks for m/s.
+# Rows stored before 5 Oct 2026 were km/h and were converted once with scripts/convert_wind_speed_to_ms.py.
+OPEN_METEO_WIND_UNIT = "wind_speed_unit=ms"
 
 
 NICT_B03_BASE_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03"
@@ -68,6 +71,7 @@ class IngestionService:
             f"https://api.open-meteo.com/v1/forecast?"
             f"latitude={lat}&longitude={lon}&timezone=UTC"
             f"&current=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,cloud_cover,direct_normal_irradiance,shortwave_radiation"
+            f"&{OPEN_METEO_WIND_UNIT}"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -397,7 +401,7 @@ class IngestionService:
             f"https://api.open-meteo.com/v1/forecast?"
             f"latitude={lat}&longitude={lon}&past_days={past_days}"
             f"&minutely_15=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,cloud_cover,direct_normal_irradiance,shortwave_radiation"
-            f"&timezone=UTC"
+            f"&timezone=UTC&{OPEN_METEO_WIND_UNIT}"
         )
 
         req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
