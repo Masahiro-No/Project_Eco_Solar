@@ -292,3 +292,27 @@ def test_calibration_check_reports_the_error_of_the_current_line_per_station():
     assert checked["ST-A"]["fitted"] is True and checked["ST-A"]["mae"] == 0.0 and checked["ST-A"]["pairs"] == 40
     assert checked["ST-B"]["fitted"] is False and checked["ST-B"]["mae"] == pytest.approx(0.1) and checked["ST-B"]["pairs"] == 35
 
+
+def test_learning_curve_is_logged_one_point_per_epoch():
+    from service.training.curves import log_history
+
+    class FakeMlflow:
+        def __init__(self):
+            self.points = []
+
+        def log_metric(self, key, value, step=None):
+            self.points.append((key, value, step))
+
+    fake = FakeMlflow()
+    history = [
+        {"epoch": 0, "val_mae": 56.8},                                               # the deployed model, before any update
+        {"epoch": 1, "train_loss": 0.021, "val_mae": 57.9, "lr": 1e-4, "aoi_frames": 654},
+        {"epoch": 2, "train_loss": 0.018, "val_mae": float("nan"), "lr": 5e-5, "note": "text is ignored"},
+    ]
+    assert log_history(fake, history, skip=("aoi_frames",)) == 6
+    assert ("epoch_val_mae", 56.8, 0) in fake.points and ("epoch_train_loss", 0.018, 2) in fake.points
+    assert ("epoch_lr", 5e-5, 2) in fake.points
+    assert not any(k in ("epoch_epoch", "epoch_aoi_frames", "epoch_note") for k, _, _ in fake.points)
+    assert not any(v != v for _, v, _ in fake.points)                               # a NaN is never logged
+    assert log_history(fake, None) == 0
+

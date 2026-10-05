@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
@@ -9,7 +9,7 @@ from api.auth.service import require_admin
 from api.frame_review.service import rejected_total
 from api.jobs.service import JobService
 from api.retrain import service
-from api.retrain.schema import RetrainStatusResponse
+from api.retrain.schema import RetrainStatusResponse, RunCurvesResponse
 from core.config import settings
 from db.database import get_db_session
 
@@ -53,3 +53,17 @@ async def get_retrain_status(
         history=history,
         history_error=history_error,
     )
+
+
+async def get_run_curves(
+    run_id: str,
+    _: User = Depends(require_admin),
+) -> RunCurvesResponse:
+    """Learning curves of one retrain run: training loss, validation metric and learning rate per epoch."""
+    if not service.RUN_ID.match(run_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="run_id must be a 32-character MLflow run id")
+    try:
+        curves = await asyncio.to_thread(service.read_curves, run_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Could not read the run from MLflow: {e}") from None
+    return RunCurvesResponse(run_id=run_id, curves=curves)

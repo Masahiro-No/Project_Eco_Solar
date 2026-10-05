@@ -447,11 +447,12 @@ def fine_tune(
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             total, steps = total + float(loss.item()), steps + 1
+        lr_used = optimizer.param_groups[0]["lr"]
         scheduler.step()
         tf_ratio *= 0.6
 
         metrics = evaluate(model, val[0], val[1], val[2], device, batch_size)
-        history.append({"epoch": epoch, "train_loss": round(total / max(1, steps), 5), **{k: round(v, 5) for k, v in metrics.items()}})
+        history.append({"epoch": epoch, "train_loss": round(total / max(1, steps), 5), "lr": lr_used, **{k: round(v, 5) for k, v in metrics.items()}})
         logger.info(
             f"[epoch {epoch}/{epochs}] train loss {total / max(1, steps):.4f}  val MSE {metrics['mse']:.5f}  "
             f"SSIM {metrics['ssim']:.4f}  AOI cloud MAE {metrics['aoi_cloud_mae_pct']}%"
@@ -552,6 +553,8 @@ def _log_mlflow(summary: dict[str, Any]) -> None:
     try:
         import mlflow
 
+        from service.training.curves import log_history
+
         mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
         mlflow.set_experiment("solar_convlstm_retrain")
         with mlflow.start_run(run_name=f"convlstm_retrain_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"):
@@ -561,6 +564,8 @@ def _log_mlflow(summary: dict[str, Any]) -> None:
             for side in ("baseline", "candidate"):
                 mlflow.log_metrics({f"val_{k}_{side}": v for k, v in summary[side].items() if isinstance(v, float) and v == v})
             mlflow.set_tags({"status": summary["status"], "data": "real_himawari_b03", "version": str(summary.get("version", ""))})
+            # learning curve: epoch 0 = the deployed model on the validation data, then one point per epoch
+            log_history(mlflow, [{"epoch": 0, **summary["baseline"]}] + list(summary.get("history") or []), skip=("aoi_frames",))
     except Exception as e:  # noqa: BLE001
         logger.warning(f"MLflow logging skipped: {e}")
 

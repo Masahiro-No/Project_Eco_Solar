@@ -284,7 +284,7 @@ def fine_tune(
     baseline_mae = evaluate_mae(model, X_va, Y_va_raw, target_scaler, device, mask=val_mask)
     best_mae, best_epoch = baseline_mae, 0
     best_state = copy.deepcopy(model.state_dict())
-    history = []
+    history = [{"epoch": 0, "val_mae": round(baseline_mae, 3)}]  # epoch 0 = the deployed model, before any update
     bad = 0
     for epoch in range(1, epochs + 1):
         model.train()
@@ -299,7 +299,10 @@ def fine_tune(
             total += float(loss.item()) * len(xb)
             count += len(xb)
         val_mae = evaluate_mae(model, X_va, Y_va_raw, target_scaler, device, mask=val_mask)
-        history.append({"epoch": epoch, "train_loss": round(total / max(count, 1), 6), "val_mae": round(val_mae, 3)})
+        history.append({
+            "epoch": epoch, "train_loss": round(total / max(count, 1), 6), "val_mae": round(val_mae, 3),
+            "lr": optimizer.param_groups[0]["lr"],
+        })
         logger.info(f"epoch {epoch}/{epochs} train_loss={total / max(count, 1):.6f} val_mae={val_mae:.2f} (best {best_mae:.2f})")
         if val_mae < best_mae - 1e-6:
             best_mae, best_epoch, bad = val_mae, epoch, 0
@@ -577,6 +580,8 @@ def _log_mlflow(summary: dict[str, Any], deployed: bool, reason: Optional[str] =
     try:
         import mlflow
 
+        from service.training.curves import log_history
+
         mlflow.set_experiment("solar_lstm_retrain")
         with mlflow.start_run():
             mlflow.log_params({k: summary[k] for k in ("train_windows", "val_windows", "label_count", "best_epoch")})
@@ -585,6 +590,7 @@ def _log_mlflow(summary: dict[str, Any], deployed: bool, reason: Optional[str] =
                 mlflow.log_metrics({"real_mae_before": summary["real_mae_before"], "real_mae_after": summary["real_mae_after"]})
                 mlflow.set_tag("holdout_day", summary["holdout_day"])
             mlflow.set_tag("gate", summary["gate"])
+            log_history(mlflow, summary.get("history"))  # learning curve: one point per epoch
             mlflow.set_tag("deployed", str(deployed))
             mlflow.set_tag("status", "deployed" if deployed else "rejected")
             if reason:

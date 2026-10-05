@@ -8,6 +8,8 @@ Nothing here starts a retrain. The numbers come from three places:
 """
 
 import json
+import re
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +52,32 @@ def deployed_convlstm() -> dict[str, Any]:
         "model_version": str(meta["version"]) if meta.get("version") is not None else None,
         "retrained_at": meta.get("retrained_at"),
     }
+
+
+CURVE_PREFIX = "epoch_"   # service/training/curves.py logs one point per epoch under this prefix
+RUN_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _mlflow_get(path: str, params: dict[str, str]) -> dict[str, Any]:
+    url = settings.mlflow_tracking_uri.rstrip("/") + path + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url, timeout=8) as resp:
+        return json.load(resp)
+
+
+def read_curves(run_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Per-epoch values of every `epoch_*` metric of a run (blocking: call in a thread)."""
+    run = _mlflow_get("/api/2.0/mlflow/runs/get", {"run_id": run_id}).get("run", {})
+    keys = sorted(m["key"] for m in run.get("data", {}).get("metrics", []) if m["key"].startswith(CURVE_PREFIX))
+    curves: dict[str, list[dict[str, Any]]] = {}
+    for key in keys:
+        points = _mlflow_get("/api/2.0/mlflow/metrics/get-history", {"run_id": run_id, "metric_key": key}).get("metrics", [])
+        by_epoch = {int(p.get("step", 0)): float(p["value"]) for p in points}   # a re-logged epoch keeps its last value
+        curves[key[len(CURVE_PREFIX):]] = [{"epoch": e, "value": v} for e, v in sorted(by_epoch.items())]
+    return curves
+
+
+def _has_curves(metrics: dict[str, Any]) -> bool:
+    return any(k.startswith(CURVE_PREFIX) for k in metrics)
 
 
 def _mlflow(path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -100,6 +128,8 @@ def lstm_run(run: dict[str, Any], deployed: dict[str, Any]) -> dict[str, Any]:
     if version is None and outcome == "deployed" and trained_at is not None and abs(ended - trained_at) < timedelta(minutes=10):
         version = deployed.get("model_version")   # the run that produced the model in use
     return {
+        "run_id": run["info"]["run_id"],
+        "has_curves": _has_curves(metrics),
         "started_at": started,
         "outcome": outcome,
         "reason": reason,
@@ -127,6 +157,8 @@ def convlstm_run(run: dict[str, Any]) -> dict[str, Any]:
     params = {p["key"]: p["value"] for p in data.get("params", [])}
     tags = {t["key"]: t["value"] for t in data.get("tags", [])}
     return {
+        "run_id": run["info"]["run_id"],
+        "has_curves": _has_curves(metrics),
         "started_at": datetime.fromtimestamp(run["info"]["start_time"] / 1000, tz=timezone.utc),
         "outcome": tags.get("status") or "unknown",
         "reason": tags.get("reason"),

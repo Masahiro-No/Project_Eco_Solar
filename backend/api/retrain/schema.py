@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 
 class RetrainRun(BaseModel):
+    run_id: str = Field(..., description="MLflow run id")
+    has_curves: bool = Field(False, description="True when the run logged its per-epoch learning curves")
     started_at: datetime
     outcome: str = Field(..., description="deployed | rejected | unknown")
     reason: Optional[str] = Field(None, description="Why a run was rejected")
@@ -14,6 +16,18 @@ class RetrainRun(BaseModel):
     before: Optional[float] = Field(None, description="Deployed model on the held-out data")
     after: Optional[float] = Field(None, description="Retrained model on the same data")
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class CurvePoint(BaseModel):
+    epoch: int
+    value: float
+
+
+class RunCurvesResponse(BaseModel):
+    """Learning curves of one retrain run: {metric name: points by epoch}. Epoch 0 is the model before the run."""
+
+    run_id: str
+    curves: dict[str, list[CurvePoint]]
 
 
 class LstmStatus(BaseModel):
