@@ -113,6 +113,8 @@ class InferenceService:
         return await create_pool(RedisSettings(
             host=settings.redis_host,
             port=settings.redis_port,
+            conn_timeout=10,
+            retry_on_timeout=True,
         ))
 
     # ------------------------------------------------------------------
