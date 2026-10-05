@@ -49,17 +49,17 @@ export type DayChartProps = {
   leadMinutes: number;
 };
 
-// Colours checked with the dataviz palette validator on the white surface (adjacent pairs separate for
-// colour-blind readers). The forecast is the answer (accent), the LSTM line is context (grey, dashed),
-// measured values are dots so they never depend on colour alone.
-const FORECAST = '#1d4ed8';
-const LSTM = '#64748b';
-const WEATHER = '#7c3aed';
-const MEASURED = '#16a34a';
-const CLEARSKY = '#cbd5e1';
-const OBSERVED_CLOUD = '#94a3b8';
+// Colours come from the theme (app/globals.css). Both sets were checked with the dataviz palette validator on
+// all pairs: the forecast is the answer (accent), the LSTM line is context (grey, dashed), Open-Meteo is the
+// second hue, and measured values are dots so they never depend on colour alone.
+const FORECAST = 'var(--chart-forecast)';
+const LSTM = 'var(--chart-context)';
+const WEATHER = 'var(--chart-weather)';
+const MEASURED = 'var(--chart-measured)';
+const CLEARSKY = 'var(--chart-clearsky)';
+const OBSERVED_CLOUD = 'var(--chart-observed)';
 
-const AXIS_TICK = { fontSize: 11, fill: '#475569' };
+const AXIS_TICK = { fontSize: 11, fill: 'var(--chart-tick)' };
 
 function hourTicks(startMs: number, endMs: number): number[] {
   const hour = 3600_000;
@@ -133,7 +133,7 @@ function DayFrame({
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={rows} margin={{ top: 14, right: 12, left: -8, bottom: -4 }}>
-        <CartesianGrid stroke="#eef2f7" vertical={false} />
+        <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
         <XAxis
           dataKey="ms"
           type="number"
@@ -142,19 +142,19 @@ function DayFrame({
           tickFormatter={(v: number) => hhmmThai(v)}
           tick={AXIS_TICK}
           tickLine={false}
-          axisLine={{ stroke: '#cbd5e1' }}
+          axisLine={{ stroke: 'var(--chart-axis)' }}
         />
         <YAxis domain={[0, yMax]} tick={AXIS_TICK} tickLine={false} axisLine={false} tickFormatter={yTickFormatter} />
-        {showNow && <ReferenceArea x1={nowMs as number} x2={endMs} fill="#eaf1ff" fillOpacity={0.55} strokeOpacity={0} />}
+        {showNow && <ReferenceArea x1={nowMs as number} x2={endMs} fill="var(--chart-future)" fillOpacity={0.55} strokeOpacity={0} />}
         {showNow && (
           <ReferenceLine
             x={nowMs as number}
-            stroke="#0f172a"
+            stroke="var(--chart-now)"
             strokeDasharray="3 3"
-            label={{ value: futureLabel, position: 'insideTopLeft', fontSize: 11, fill: '#334155', dx: 4, dy: -12 }}
+            label={{ value: futureLabel, position: 'insideTopLeft', fontSize: 11, fill: 'var(--chart-tick)', dx: 4, dy: -12 }}
           />
         )}
-        <Tooltip content={tooltip} cursor={{ stroke: '#94a3b8', strokeWidth: 1 }} />
+        <Tooltip content={tooltip} cursor={{ stroke: 'var(--chart-cursor)', strokeWidth: 1 }} />
         {children}
       </ComposedChart>
     </ResponsiveContainer>
@@ -222,7 +222,7 @@ export function DayGhiChart(props: DayChartProps) {
             <Line dataKey="weather" stroke={WEATHER} strokeWidth={1.5} dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
             <Line dataKey="lstm" stroke={LSTM} strokeWidth={2} strokeDasharray="6 5" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
             <Line dataKey="forecast" stroke={FORECAST} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
-            <Scatter dataKey="label" fill={MEASURED} stroke="#ffffff" strokeWidth={1} isAnimationActive={false} />
+            <Scatter dataKey="label" fill={MEASURED} stroke="var(--chart-dot-ring)" strokeWidth={1} isAnimationActive={false} />
           </DayFrame>
         </div>
       )}
@@ -283,7 +283,7 @@ export function DayPowerChart(props: DayChartProps) {
             <Area dataKey="genBand" stroke="none" fill={FORECAST} fillOpacity={0.14} activeDot={false} isAnimationActive={false} connectNulls />
             <Line dataKey="target" stroke={LSTM} strokeWidth={2} strokeDasharray="6 5" dot={false} activeDot={false} isAnimationActive={false} />
             <Line dataKey="gen" stroke={FORECAST} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
-            <Scatter dataKey="labelKw" fill={MEASURED} stroke="#ffffff" strokeWidth={1} isAnimationActive={false} />
+            <Scatter dataKey="labelKw" fill={MEASURED} stroke="var(--chart-dot-ring)" strokeWidth={1} isAnimationActive={false} />
           </DayFrame>
         </div>
       )}

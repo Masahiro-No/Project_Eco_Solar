@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { BanIcon, CheckCircle2Icon, CircleHelpIcon, HistoryIcon, RefreshCwIcon, RepeatIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
+import { LearningCurves } from '@/components/UI/LearningCurves';
 import { useAuth } from '@/context/AuthContext';
 import { RetrainRun, RetrainStatus, dayViewApi, thaiDateTime } from '@/services/dayViewApi';
 
@@ -183,6 +184,8 @@ export default function RetrainPage() {
         </Panel>
       </div>
 
+      {status && <LearningCurves model="lstm" runs={status.history.lstm} />}
+
       <Panel
         title={t('rt_history_lstm')}
         icon={<HistoryIcon className="h-5 w-5 text-brand" />}
@@ -231,6 +234,8 @@ export default function RetrainPage() {
         )}
         <p className="mt-2 text-[12px] leading-snug text-slate-600">{t('rt_lstm_cols_help')}</p>
       </Panel>
+
+      {status && <LearningCurves model="convlstm" runs={status.history.convlstm} />}
 
       <Panel
         title={t('rt_history_convlstm')}

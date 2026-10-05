@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import { Panel } from '@/components/UI/Panel';
 import { LstmStatusPanel } from '@/components/UI/LstmStatusPanel';
+import { CalibrationStatusPanel } from '@/components/UI/CalibrationStatusPanel';
 import { useAuth } from '@/context/AuthContext';
 import { solarApi, StationResponse } from '@/services/api';
 import {
@@ -232,6 +233,7 @@ export default function LabelingPage() {
       )}
 
       <LstmStatusPanel refreshKey={result} />
+      {stationId && <CalibrationStatusPanel stationId={stationId} refreshKey={result} />}
 
       <Panel
         className="shrink-0"
@@ -296,13 +298,13 @@ export default function LabelingPage() {
               <div className="h-[260px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
-                    <CartesianGrid stroke="#eef2f7" />
-                    <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} minTickGap={24} />
-                    <YAxis domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false} />
-                    <Tooltip contentStyle={{ fontSize: 12.5, borderRadius: 8, borderColor: '#e3e9f2' }} />
-                    <Line dataKey="weather" name={t('lb_legend_weather')} stroke="#94a3b8" strokeWidth={1.4} dot={false} isAnimationActive={false} connectNulls />
-                    <Line dataKey="pred" name={t('lb_legend_pred')} stroke="#3b82f6" strokeWidth={1.8} strokeDasharray="6 5" dot={false} isAnimationActive={false} connectNulls />
-                    <Scatter dataKey="label" name={t('lb_legend_label')} fill="#16a34a" isAnimationActive={false} />
+                    <CartesianGrid stroke="var(--chart-grid)" />
+                    <XAxis dataKey="t" tick={{ fontSize: 11, fill: 'var(--chart-tick)' }} tickLine={false} axisLine={{ stroke: 'var(--chart-axis)' }} minTickGap={24} />
+                    <YAxis domain={[0, 'auto']} tick={{ fontSize: 11, fill: 'var(--chart-tick)' }} tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ fontSize: 12.5, borderRadius: 8, borderColor: 'var(--chart-axis)', background: 'var(--chart-tooltip-bg)', color: 'var(--chart-tooltip-ink)' }} />
+                    <Line dataKey="weather" name={t('lb_legend_weather')} stroke="var(--chart-observed)" strokeWidth={1.4} dot={false} isAnimationActive={false} connectNulls />
+                    <Line dataKey="pred" name={t('lb_legend_pred')} stroke="var(--chart-forecast)" strokeWidth={1.8} strokeDasharray="6 5" dot={false} isAnimationActive={false} connectNulls />
+                    <Scatter dataKey="label" name={t('lb_legend_label')} fill="var(--chart-measured)" isAnimationActive={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -322,7 +324,7 @@ export default function LabelingPage() {
                 <button onClick={() => setChecked({})} disabled={toSave.length + invalidChecked === 0} className={`${btn} border border-line bg-white text-slate-700 hover:bg-canvas`}>
                   {t('lb_clear')}
                 </button>
-                <button onClick={saveEdits} disabled={busy || toSave.length === 0} className={`${btn} bg-emerald-600 text-white`}>
+                <button onClick={saveEdits} disabled={busy || toSave.length === 0} className={`${btn} bg-emerald-700 text-white`}>
                   <SaveIcon className="h-3.5 w-3.5" />
                   {busy ? t('lb_saving') : `${t('lb_save')} (${toSave.length})`}
                 </button>
@@ -445,7 +447,7 @@ export default function LabelingPage() {
                 <span className="pb-2 text-[12px] text-muted">
                   {t('lb_file_rows')}: <b>{preview.total_rows}</b>
                 </span>
-                <button onClick={importFile} disabled={busy || !tsCol || !ghiCol || tsCol === ghiCol} className={`${btn} ml-auto bg-emerald-600 text-white`}>
+                <button onClick={importFile} disabled={busy || !tsCol || !ghiCol || tsCol === ghiCol} className={`${btn} ml-auto bg-emerald-700 text-white`}>
                   <SaveIcon className="h-3.5 w-3.5" />
                   {busy ? t('lb_saving') : t('lb_import')}
                 </button>

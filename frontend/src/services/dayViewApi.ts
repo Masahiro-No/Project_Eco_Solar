@@ -74,6 +74,9 @@ export interface WeatherRow {
 }
 
 export interface RetrainRun {
+  run_id: string;
+  /** true when the run logged one value per epoch (runs before 5 Oct 2026 evening did not) */
+  has_curves: boolean;
   started_at: string;
   outcome: string; // deployed | rejected | unknown
   reason: string | null;
@@ -110,6 +113,23 @@ export interface RetrainStatus {
   history_error: string | null;
 }
 
+/** Learning curves of one retrain run: metric name -> value per epoch (epoch 0 = the model before the run). */
+export interface RunCurves {
+  run_id: string;
+  curves: Record<string, { epoch: number; value: number }[]>;
+}
+
+/** Has the satellite-to-irradiance relation been compared with measured GHI of a station? */
+export interface CalibrationStatus {
+  station_id: string;
+  state: 'fitted' | 'checked' | 'insufficient' | 'not_checked' | 'no_calibration';
+  pairs: number | null;
+  min_pairs: number;
+  mae: number | null;
+  checked_at: string | null;
+  pending: boolean;
+}
+
 export const LEAD_OPTIONS = [10, 60, 120, 180] as const;
 export type LeadMinutes = (typeof LEAD_OPTIONS)[number];
 
@@ -130,6 +150,14 @@ export const dayViewApi = {
 
   getRetrainStatus(): Promise<RetrainStatus> {
     return send('/api/retrain/status', { method: 'GET' }, true);
+  },
+
+  getRunCurves(runId: string): Promise<RunCurves> {
+    return send(`/api/retrain/runs/${encodeURIComponent(runId)}/curves`, { method: 'GET' }, true);
+  },
+
+  getCalibrationStatus(stationId: string): Promise<CalibrationStatus> {
+    return send(`/api/label-studio/ground-truth/calibration-status?station_id=${encodeURIComponent(stationId)}`, { method: 'GET' }, true);
   },
 };
 

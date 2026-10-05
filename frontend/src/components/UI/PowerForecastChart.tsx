@@ -8,8 +8,8 @@ import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
 import { PowerChartPoint, useForecast } from '@/context/ForecastContext';
 
-const GEN = '#1d4ed8';
-const TARGET = '#64748b';
+const GEN = 'var(--chart-forecast)';
+const TARGET = 'var(--chart-context)';
 
 type TipProps = { active?: boolean; payload?: { payload: PowerChartPoint }[] };
 
@@ -77,16 +77,16 @@ export function PowerForecastChart() {
           <div className="min-h-0 flex-1">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={chartPowerData} margin={{ top: 8, right: 10, left: -4, bottom: -4 }}>
-                <CartesianGrid stroke="#eef2f7" vertical={false} />
-                <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} interval={2} />
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="t" tick={{ fontSize: 11, fill: 'var(--chart-tick)' }} tickLine={false} axisLine={{ stroke: 'var(--chart-axis)' }} interval={2} />
                 <YAxis
                   domain={[0, yMax]}
-                  tick={{ fontSize: 11, fill: '#475569' }}
+                  tick={{ fontSize: 11, fill: 'var(--chart-tick)' }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v: number) => v.toLocaleString()}
                 />
-                <Tooltip content={<PowerTooltip labels={labels} />} cursor={{ stroke: '#94a3b8', strokeWidth: 1 }} />
+                <Tooltip content={<PowerTooltip labels={labels} />} cursor={{ stroke: 'var(--chart-cursor)', strokeWidth: 1 }} />
                 <Area dataKey="band" stroke="none" fill={GEN} fillOpacity={0.14} activeDot={false} isAnimationActive={false} connectNulls />
                 <Line dataKey="target" stroke={TARGET} strokeWidth={2} strokeDasharray="6 5" dot={false} activeDot={false} isAnimationActive={false} />
                 <Line dataKey="gen" stroke={GEN} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />

@@ -12,7 +12,7 @@ import { DayFramesResponse, WeatherRow, dayViewApi, hhmmThai, thaiDayMs, todayTh
 
 const STEP_MS = 600_000;
 const WINDOW_FRAMES = 12; // frames the ConvLSTM reads
-const AXIS_TICK = { fontSize: 11, fill: '#475569' };
+const AXIS_TICK = { fontSize: 11, fill: 'var(--chart-tick)' };
 
 type Row = WeatherRow & { ms: number; ratio: number | null };
 type Series = { key: keyof Row; label: string; color: string; dash?: boolean };
@@ -54,13 +54,13 @@ function MiniChart({ title, unit, series, rows, startMs, endMs, digits = 0 }: {
       <div className="min-h-0 flex-1">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={rows} margin={{ top: 6, right: 10, left: -12, bottom: -4 }}>
-            <CartesianGrid stroke="#eef2f7" vertical={false} />
-            <XAxis dataKey="ms" type="number" domain={[startMs, endMs]} ticks={ticks} tickFormatter={(v: number) => hhmmThai(v)} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} />
+            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+            <XAxis dataKey="ms" type="number" domain={[startMs, endMs]} ticks={ticks} tickFormatter={(v: number) => hhmmThai(v)} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: 'var(--chart-axis)' }} />
             <YAxis domain={['auto', 'auto']} tick={AXIS_TICK} tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 1 })} />
             <Tooltip
               labelFormatter={(v) => hhmmThai(Number(v))}
               formatter={(value, name) => [`${fmt(value)} ${unit}`, name]}
-              contentStyle={{ fontSize: 12.5, borderRadius: 8, borderColor: '#e3e9f2' }}
+              contentStyle={{ fontSize: 12.5, borderRadius: 8, borderColor: 'var(--chart-axis)', background: 'var(--chart-tooltip-bg)', color: 'var(--chart-tooltip-ink)' }}
             />
             {shown.map((s) => (
               <Line key={String(s.key)} dataKey={s.key as string} name={s.label} stroke={s.color} strokeWidth={2} strokeDasharray={s.dash ? '6 5' : undefined} dot={false} activeDot={{ r: 3 }} isAnimationActive={false} />
@@ -188,17 +188,17 @@ export default function ModelInputsPage() {
                 unit="W/m²"
                 {...chart}
                 series={[
-                  { key: 'ghi', label: 'GHI', color: '#1d4ed8' },
-                  { key: 'dni', label: 'DNI', color: '#7c3aed' },
-                  { key: 'dhi', label: 'DHI', color: '#0f766e' },
-                  { key: 'clearsky_ghi', label: t('dv_clearsky'), color: '#94a3b8', dash: true },
+                  { key: 'ghi', label: 'GHI', color: 'var(--chart-forecast)' },
+                  { key: 'dni', label: 'DNI', color: 'var(--chart-weather)' },
+                  { key: 'dhi', label: 'DHI', color: 'var(--chart-teal)' },
+                  { key: 'clearsky_ghi', label: t('dv_clearsky'), color: 'var(--chart-observed)', dash: true },
                 ]}
               />
-              <MiniChart title={t('in_chart_temperature')} unit="°C" digits={1} {...chart} series={[{ key: 'temperature', label: t('in_chart_temperature'), color: '#1d4ed8' }]} />
-              <MiniChart title={t('in_chart_humidity')} unit="%" {...chart} series={[{ key: 'relative_humidity', label: t('in_chart_humidity'), color: '#1d4ed8' }]} />
-              <MiniChart title={t('in_chart_wind')} unit={t('in_unit_wind')} digits={1} {...chart} series={[{ key: 'wind_speed', label: t('in_chart_wind'), color: '#1d4ed8' }]} />
-              <MiniChart title={t('in_chart_pressure')} unit="hPa" digits={1} {...chart} series={[{ key: 'surface_pressure', label: t('in_chart_pressure'), color: '#1d4ed8' }]} />
-              <MiniChart title={t('in_chart_zenith')} unit="°" digits={1} {...chart} series={[{ key: 'solar_zenith_angle', label: t('in_chart_zenith'), color: '#1d4ed8' }]} />
+              <MiniChart title={t('in_chart_temperature')} unit="°C" digits={1} {...chart} series={[{ key: 'temperature', label: t('in_chart_temperature'), color: 'var(--chart-forecast)' }]} />
+              <MiniChart title={t('in_chart_humidity')} unit="%" {...chart} series={[{ key: 'relative_humidity', label: t('in_chart_humidity'), color: 'var(--chart-forecast)' }]} />
+              <MiniChart title={t('in_chart_wind')} unit={t('in_unit_wind')} digits={1} {...chart} series={[{ key: 'wind_speed', label: t('in_chart_wind'), color: 'var(--chart-forecast)' }]} />
+              <MiniChart title={t('in_chart_pressure')} unit="hPa" digits={1} {...chart} series={[{ key: 'surface_pressure', label: t('in_chart_pressure'), color: 'var(--chart-forecast)' }]} />
+              <MiniChart title={t('in_chart_zenith')} unit="°" digits={1} {...chart} series={[{ key: 'solar_zenith_angle', label: t('in_chart_zenith'), color: 'var(--chart-forecast)' }]} />
             </div>
 
             {last && (

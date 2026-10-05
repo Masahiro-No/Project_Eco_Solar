@@ -149,7 +149,7 @@ export function CloudPlayer({ data, loading }: { data: DayFramesResponse | null;
               onChange={(e) => go(Number(e.target.value))}
               aria-label={t('cp_slider')}
               aria-valuetext={`${hhmmThai(shot.ms)} ${t(shot.predicted ? 'cp_badge_predicted' : 'cp_badge_real')}`}
-              className="mt-1 w-full accent-[#1d4ed8]"
+              className="mt-1 w-full accent-brand"
             />
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">

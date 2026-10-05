@@ -36,7 +36,15 @@ export default async function RootLayout({
   const locale = saved === "en" ? "en" : "th";
 
   return (
-    <html lang={locale}>
+    <html lang={locale} suppressHydrationWarning>
+      <head>
+        {/* apply the saved theme before first paint, so a dark page never flashes white (key: ThemeContext) */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "try{if(localStorage.getItem('solar_theme')==='dark')document.documentElement.dataset.theme='dark'}catch(e){}",
+          }}
+        />
+      </head>
       <body
         className={`${notoThai.variable} ${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
         suppressHydrationWarning

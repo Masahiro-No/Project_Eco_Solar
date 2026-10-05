@@ -2,11 +2,91 @@
 @tailwind components;
 @tailwind utilities;
 
-/* The UI is designed for a light theme only (see tailwind colors: canvas, ink, ...). */
+/*
+ * Theme. Two looks: light (default) and dark (data-theme="dark" on <html>, set by ThemeContext).
+ *
+ * 1. Tokens: the Tailwind colours of this project (canvas, ink, muted, line, brand, ok, warn, bad, sun) read
+ *    these variables, so every class built on them follows the theme by itself.
+ * 2. Charts: recharts gets its colours as var(--chart-*). Both sets were checked with the dataviz palette
+ *    validator on their own surface (lightness band, colour-blind separation on all pairs, contrast); the dark
+ *    set is its own selection, not the light one inverted.
+ * 3. Dark overrides (end of this file): the Tailwind classes that name a fixed colour (bg-white, text-slate-700,
+ *    bg-red-50 ...) are remapped for the dark look. A new fixed-colour class needs a line there.
+ */
 :root {
   --background: #ffffff;
   --foreground: #171717;
   color-scheme: light;
+
+  --c-canvas: 244 247 251;
+  --c-ink: 15 23 42;
+  --c-muted: 100 116 139;
+  --c-line: 227 233 242;
+  --c-brand: 29 78 216;
+  --c-brand-soft: 234 241 255;
+  --c-brand-mid: 59 130 246;
+  --c-ok: 22 163 74;
+  --c-ok-soft: 232 247 238;
+  --c-warn: 217 119 6;
+  --c-warn-soft: 255 244 220;
+  --c-bad: 220 38 38;
+  --c-bad-soft: 253 236 236;
+  --c-sun: 245 158 11;
+
+  --chart-forecast: #1d4ed8; /* the system's forecast: the answer */
+  --chart-context: #64748b;  /* LSTM alone, target: context, drawn dashed */
+  --chart-weather: #c2410c;  /* Open-Meteo, DNI, expected loss of light */
+  --chart-measured: #16a34a; /* measured values, always dots */
+  --chart-teal: #0d9488;
+  --chart-clearsky: #cbd5e1;
+  --chart-observed: #94a3b8;
+  --chart-grid: #eef2f7;
+  --chart-tick: #475569;
+  --chart-axis: #cbd5e1;
+  --chart-cursor: #94a3b8;
+  --chart-now: #0f172a;
+  --chart-future: #eaf1ff;
+  --chart-dot-ring: #ffffff;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-ink: #0f172a;
+}
+
+[data-theme="dark"] {
+  --background: #0b1220;
+  --foreground: #e6edf7;
+  color-scheme: dark;
+
+  --c-canvas: 11 18 32;
+  --c-ink: 230 237 247;
+  --c-muted: 147 161 184;
+  --c-line: 37 50 74;
+  --c-brand: 37 99 235;
+  --c-brand-soft: 23 38 74;
+  --c-brand-mid: 96 165 250;
+  --c-ok: 74 222 128;
+  --c-ok-soft: 15 42 29;
+  --c-warn: 251 191 36;
+  --c-warn-soft: 46 34 8;
+  --c-bad: 248 113 113;
+  --c-bad-soft: 51 22 22;
+  --c-sun: 251 191 36;
+
+  --chart-forecast: #3b82f6;
+  --chart-context: #8b93a1;
+  --chart-weather: #ea580c;
+  --chart-measured: #16a34a;
+  --chart-teal: #0d9488;
+  --chart-clearsky: #475569;
+  --chart-observed: #64748b;
+  --chart-grid: #1e2a40;
+  --chart-tick: #9fb0c8;
+  --chart-axis: #334155;
+  --chart-cursor: #64748b;
+  --chart-now: #e2e8f0;
+  --chart-future: #17264a;
+  --chart-dot-ring: #111a2e;
+  --chart-tooltip-bg: #16213a;
+  --chart-tooltip-ink: #e6edf7;
 }
 
 body {
@@ -29,6 +109,86 @@ body {
 }
 .recharts-wrapper:focus-visible,
 .recharts-wrapper *:focus-visible {
-  outline: 2px solid #1d4ed8;
+  outline: 2px solid rgb(var(--c-brand-mid));
   outline-offset: 2px;
 }
+
+/* ------------------------------------------------------------------------------------------------------------
+ * Dark overrides for classes that name a fixed colour. Left alone on purpose: text-white and the white/blue
+ * tints of the login hero (it is dark in both looks), bg-slate-900 behind satellite frames, bg-black/40 behind
+ * dialogs, border-white of the area box drawn on a satellite frame, and solid red / emerald buttons.
+ * ---------------------------------------------------------------------------------------------------------- */
+[data-theme="dark"] .bg-white { background-color: #111a2e; }
+[data-theme="dark"] .bg-white\/80 { background-color: rgb(17 26 46 / 0.8); }
+[data-theme="dark"] .bg-slate-50,
+[data-theme="dark"] .disabled\:bg-slate-50:disabled { background-color: #16213a; }
+[data-theme="dark"] .bg-slate-50\/60 { background-color: rgb(22 33 58 / 0.6); }
+[data-theme="dark"] .bg-slate-100 { background-color: #1b2742; }
+[data-theme="dark"] .bg-slate-100\/90 { background-color: rgb(27 39 66 / 0.9); }
+[data-theme="dark"] .bg-slate-200 { background-color: #25324a; }
+[data-theme="dark"] .bg-slate-300 { background-color: #334155; }
+[data-theme="dark"] .hover\:bg-slate-50:hover { background-color: #1b2742; }
+[data-theme="dark"] .hover\:bg-slate-50\/60:hover { background-color: rgb(27 39 66 / 0.6); }
+[data-theme="dark"] .hover\:bg-slate-100:hover { background-color: #22304f; }
+[data-theme="dark"] .hover\:bg-slate-200\/70:hover { background-color: rgb(51 65 85 / 0.7); }
+
+[data-theme="dark"] .text-slate-900 { color: #e6edf7; }
+[data-theme="dark"] .text-slate-800,
+[data-theme="dark"] .hover\:text-slate-800:hover { color: #dbe4f0; }
+[data-theme="dark"] .text-slate-700,
+[data-theme="dark"] .hover\:text-slate-600:hover { color: #c3cee0; }
+[data-theme="dark"] .text-slate-600,
+[data-theme="dark"] .disabled\:text-slate-700:disabled { color: #a9b6cc; }
+[data-theme="dark"] .text-slate-500 { color: #93a1b8; }
+[data-theme="dark"] .text-slate-400 { color: #8494ad; }
+[data-theme="dark"] .text-slate-300 { color: #64748b; }
+[data-theme="dark"] .placeholder\:text-slate-400::placeholder { color: #6b7a93; }
+
+/* brand as text needs a lighter step than brand as a button fill (white text stays readable on the fill) */
+[data-theme="dark"] .text-brand,
+[data-theme="dark"] .hover\:text-brand:hover { color: #8ab4ff; }
+[data-theme="dark"] .text-\[\#0f1f4d\] { color: #e6edf7; }
+[data-theme="dark"] .text-\[\#1e3a8a\] { color: #bfdbfe; }
+
+[data-theme="dark"] .border-slate-100 { border-color: #1e2a40; }
+[data-theme="dark"] .border-slate-200\/90 { border-color: #25324a; }
+[data-theme="dark"] .border-slate-400 { border-color: #475569; }
+[data-theme="dark"] .ring-slate-300 { --tw-ring-color: #475569; }
+
+/* messages and status chips: dark tint, light text, same hue */
+[data-theme="dark"] .bg-red-50 { background-color: #331616; }
+[data-theme="dark"] .border-red-200 { border-color: #7f1d1d; }
+[data-theme="dark"] .border-red-400 { border-color: #b91c1c; }
+[data-theme="dark"] .text-red-700,
+[data-theme="dark"] .text-\[\#991b1b\] { color: #fca5a5; }
+[data-theme="dark"] .text-red-600,
+[data-theme="dark"] .text-red-500,
+[data-theme="dark"] .hover\:text-red-600:hover { color: #f87171; }
+[data-theme="dark"] .bg-amber-50 { background-color: #2e2208; }
+[data-theme="dark"] .bg-amber-100 { background-color: #3a2a0a; }
+[data-theme="dark"] .border-amber-200 { border-color: #78350f; }
+[data-theme="dark"] .text-amber-800,
+[data-theme="dark"] .text-amber-700,
+[data-theme="dark"] .text-\[\#92400e\] { color: #fcd34d; }
+[data-theme="dark"] .text-amber-600 { color: #fbbf24; }
+[data-theme="dark"] .bg-green-50 { background-color: #0f2a1d; }
+[data-theme="dark"] .bg-emerald-50\/60 { background-color: rgb(15 42 29 / 0.6); }
+[data-theme="dark"] .bg-emerald-100 { background-color: #123524; }
+[data-theme="dark"] .border-green-200,
+[data-theme="dark"] .border-emerald-200 { border-color: #14532d; }
+[data-theme="dark"] .text-green-800,
+[data-theme="dark"] .text-green-700,
+[data-theme="dark"] .text-\[\#166534\] { color: #86efac; }
+[data-theme="dark"] .text-green-600 { color: #4ade80; }
+[data-theme="dark"] .text-emerald-800,
+[data-theme="dark"] .text-emerald-700,
+[data-theme="dark"] .text-emerald-600 { color: #6ee7b7; }
+[data-theme="dark"] .bg-blue-50\/70 { background-color: rgb(23 38 74 / 0.7); }
+
+/* tooltips drawn by recharts itself (charts without a custom tooltip) */
+[data-theme="dark"] .recharts-default-tooltip {
+  background-color: var(--chart-tooltip-bg) !important;
+  border-color: var(--chart-axis) !important;
+  color: var(--chart-tooltip-ink);
+}
+[data-theme="dark"] .recharts-tooltip-label { color: var(--chart-tooltip-ink); }

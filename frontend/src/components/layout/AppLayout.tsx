@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/UI/Sidebar';
 import { LanguageProvider } from '@/context/LanguageContext';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { ForecastProvider } from '@/context/ForecastContext';
+import { ThemeProvider } from '@/context/ThemeContext';
 
 function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -59,10 +60,12 @@ export function AppLayout({
   initialLocale?: 'th' | 'en';
 }) {
   return (
-    <LanguageProvider initialLocale={initialLocale}>
-      <AuthProvider>
-        <Shell>{children}</Shell>
-      </AuthProvider>
-    </LanguageProvider>
+    <ThemeProvider>
+      <LanguageProvider initialLocale={initialLocale}>
+        <AuthProvider>
+          <Shell>{children}</Shell>
+        </AuthProvider>
+      </LanguageProvider>
+    </ThemeProvider>
   );
 }

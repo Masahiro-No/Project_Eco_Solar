@@ -13,15 +13,18 @@ import {
   SettingsIcon,
   LogOutIcon,
   LogInIcon,
+  MoonIcon,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useForecast } from '@/context/ForecastContext';
+import { useTheme } from '@/context/ThemeContext';
 
 export function TopBar() {
   const t = useTranslations('common');
   const { locale, setLocale } = useLanguage();
+  const { theme, toggleTheme } = useTheme();
   const { isAdmin } = useAuth();
   const { stations, selectedStationId, setSelectedStationId, selectedStation, reloadStations } = useForecast();
 
@@ -117,6 +120,19 @@ export function TopBar() {
             </button>
           </div>
 
+          {/* Theme switch: light is the default, the choice is remembered in this browser */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-pressed={theme === 'dark'}
+            aria-label={t('theme_toggle')}
+            title={t(theme === 'dark' ? 'theme_to_light' : 'theme_to_dark')}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-line bg-slate-50 px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+          >
+            {theme === 'dark' ? <MoonIcon className="h-4 w-4" aria-hidden="true" /> : <SunIcon className="h-4 w-4" aria-hidden="true" />}
+            <span className="hidden lg:inline">{t(theme === 'dark' ? 'theme_dark' : 'theme_light')}</span>
+          </button>
+
           <span className="h-7 w-px bg-line" />
 
           {/* User Profile Popover - Streamlined to Profile, Settings, Login */}
@@ -186,7 +202,7 @@ function UserMenu() {
       >
         <span
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-bold text-xs text-white shadow-xs ${
-            isLoggedIn ? 'bg-[#e065a3]' : 'bg-slate-400'
+            isLoggedIn ? 'bg-[#be185d]' : 'bg-slate-400'
           }`}
         >
           {initials}
@@ -195,7 +211,7 @@ function UserMenu() {
           <p className="truncate text-[13px] font-bold leading-tight text-slate-800">
             {displayName}
           </p>
-          <p className="truncate text-[11px] font-medium leading-tight text-slate-400">
+          <p className="truncate text-[11px] font-medium leading-tight text-slate-600">
             {displayRole}
           </p>
         </div>
@@ -223,7 +239,7 @@ function UserMenu() {
           >
             <span
               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-bold text-xs text-white shadow-xs ${
-                isLoggedIn ? 'bg-[#e065a3]' : 'bg-slate-400'
+                isLoggedIn ? 'bg-[#be185d]' : 'bg-slate-400'
               }`}
             >
               {initials}
