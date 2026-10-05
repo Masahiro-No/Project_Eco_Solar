@@ -21,12 +21,15 @@ import io
 import logging
 import math
 import os
+import time
 from typing import Optional, Tuple
 import urllib.error
 import urllib.request
 
 import numpy as np
 from PIL import Image
+
+from service.workers.solar_geometry import cos_zenith_at
 
 logger = logging.getLogger("satellite_preprocessor")
 
@@ -40,6 +43,13 @@ MAX_FEED_AGE_MIN = int(os.environ.get("SATELLITE_MAX_FEED_AGE_MIN", "60"))
 MAX_SHIFT_MIN = int(os.environ.get("SATELLITE_MAX_SHIFT_MIN", "30"))
 FETCH_TIMEOUT_S = float(os.environ.get("SATELLITE_FETCH_TIMEOUT_S", "8"))
 MAX_NETWORK_ERRORS = 2  # give up early when NICT is unreachable instead of timing out on every frame
+
+# NICT answers a scan it has no image for with an all-black tile: a scan that is not processed yet, or one
+# that Himawari skips (every day at 02:40 and 14:40 UTC). With the sun up that is "no observation",
+# never a cloud-free scene, so such a frame is treated as missing and is not cached.
+DAYLIGHT_COS_ZENITH = 0.10
+BLANK_RETRY_S = 300  # ask NICT again for a blank scan at most every 5 minutes
+_BLANK_AT: dict[datetime, float] = {}
 
 _TILE_CACHE: dict[datetime, np.ndarray] = {}  # full B03 tile per scan time, shared by all stations
 _TILE_CACHE_MAX = 36
@@ -93,6 +103,8 @@ def _fetch_b03_tile(utc_dt: datetime) -> tuple[str, Optional[np.ndarray]]:
     """Download the Band 03 tile of one scan. Returns ("ok", tile) | ("not_found", None) | ("error", None)."""
     if utc_dt in _TILE_CACHE:
         return "ok", _TILE_CACHE[utc_dt]
+    if time.time() - _BLANK_AT.get(utc_dt, 0.0) < BLANK_RETRY_S:
+        return "not_found", None
 
     url = (
         "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03/2d/550/"
@@ -170,18 +182,34 @@ def load_and_preprocess_single_frame(image_bytes: bytes, target_size: Tuple[int,
     return np.clip(arr, 0.0, 1.0)
 
 
+def is_blank_daytime_frame(frame: np.ndarray, lat: float, lon: float, ts: datetime) -> bool:
+    """True for an all-black frame taken while the sun is up at the station (see DAYLIGHT_COS_ZENITH)."""
+    return float(np.max(frame)) == 0.0 and cos_zenith_at(lat, lon, ts) >= DAYLIGHT_COS_ZENITH
+
+
+def _mark_blank(ts: datetime) -> None:
+    _TILE_CACHE.pop(ts, None)  # download again later: the real image may still be published
+    now = time.time()
+    for old in [t for t, seen in _BLANK_AT.items() if now - seen > 6 * 3600]:
+        del _BLANK_AT[old]
+    _BLANK_AT[ts] = now
+
+
 def frame_object_name(station_id: str, ts: datetime) -> str:
     return f"{station_id}/b03_{ts:%Y%m%d_%H%M%S}.png"
 
 
-def connect_minio() -> Optional[object]:
-    """MinIO client for the frame cache, or None when MinIO is not reachable (frames then come straight from NICT)."""
+def connect_minio(read_timeout: float = 1.5) -> Optional[object]:
+    """MinIO client for the frame cache, or None when MinIO is not reachable (frames then come straight from NICT).
+
+    The short default timeout keeps a forecast from waiting on a slow cache; listing the whole cache needs more.
+    """
     try:
         import urllib3
         from minio import Minio
 
         http_client = urllib3.PoolManager(
-            timeout=urllib3.Timeout(connect=0.8, read=1.5),
+            timeout=urllib3.Timeout(connect=0.8, read=read_timeout),
             retries=urllib3.Retry(total=1, connect=1, read=1),
         )
         for ep in [e for e in (os.environ.get("MINIO_ENDPOINT"), "minio:9000", "localhost:9000") if e]:
@@ -215,11 +243,16 @@ class _FrameSource:
         if ts in self._seen:
             return self._seen[ts]
         frame = self._from_cache(ts)
+        if frame is not None and is_blank_daytime_frame(frame, self.lat, self.lon, ts):
+            frame = None  # a blank tile that was cached before: ask NICT again
         if frame is None and self.network_errors < MAX_NETWORK_ERRORS:
             status, tile = _fetch_b03_tile(ts)
             if status == "ok":
                 frame = _crop(tile, self.lat, self.lon)
-                if frame is not None:
+                if frame is not None and is_blank_daytime_frame(frame, self.lat, self.lon, ts):
+                    _mark_blank(ts)
+                    frame = None
+                elif frame is not None:
                     self._to_cache(ts, frame)
             elif status == "error":
                 self.network_errors += 1
@@ -317,7 +350,7 @@ def _cache_latest_rgb(station_id: str, lat: float, lon: float, ts: datetime, min
         return
     try:
         rgb = fetch_rgb_crop(ts, lat, lon, crop_size=64)
-        if rgb is None:
+        if rgb is None or is_blank_daytime_frame(np.asarray(rgb), lat, lon, ts):
             return
         buf = io.BytesIO()
         rgb.save(buf, format="PNG")

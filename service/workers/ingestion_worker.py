@@ -15,7 +15,9 @@ Flow:
      finished results into the `predictions` table.
 """
 
+import asyncio
 import io
+import json
 import logging
 import os
 import sys
@@ -250,6 +252,9 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
             # D. Chain: run the real forecast model on the data that was just ingested
             results["inference"] = await _trigger_inference(ctx, db, active_stations, dt_frame)
 
+            # E. ConvLSTM retrain: start one when a batch of new real daytime scans is complete
+            results["convlstm_retrain"] = await _trigger_convlstm_retrain(ctx, active_stations)
+
         duration = time.time() - start_time
         results["duration_seconds"] = round(duration, 2)
         runs_counter.add(1)
@@ -287,6 +292,43 @@ async def _trigger_inference(ctx: dict, db, stations, dt_frame: Optional[datetim
             summary["skipped"][st.id] = reason
             logger.warning(f"[{st.id}] Inference skipped: {reason}")
     return summary
+
+
+async def _trigger_convlstm_retrain(ctx: dict, stations) -> dict[str, Any]:
+    """Enqueue the ConvLSTM retrain when enough new real daytime scans are in the frame cache."""
+    if not settings.enable_retrain:
+        return {"status": "retrain_disabled"}
+    pool = ctx.get("redis")
+    if pool is None:
+        return {"status": "no_redis"}
+    try:
+        from service.workers import convlstm_batch
+        from service.workers.satellite_preprocessor import connect_minio
+
+        client = connect_minio(read_timeout=60)
+        if client is None:
+            return {"status": "minio_unavailable"}
+        coords = {st.id: (st.latitude, st.longitude) for st in stations}
+        since = convlstm_batch.parse_time(await pool.get(convlstm_batch.LAST_FRAME_KEY))
+        scans = await asyncio.to_thread(convlstm_batch.list_cached_scans, client)
+        status = convlstm_batch.batch_status(scans, coords, since, settings.convlstm_retrain_threshold)
+        if not status["due"]:
+            return {"status": "accumulating", "new_scans": status["new_scans"], "batch_size": status["batch_size"]}
+
+        # one job per batch: the key is cleared by the trainer when the run ends
+        if not await pool.set(convlstm_batch.SCHEDULED_KEY, "1", nx=True, ex=3 * 3600):
+            return {"status": "already_scheduled", "new_scans": status["new_scans"]}
+        payload = {"new_scans": status["new_scans"], "batch_size": status["batch_size"], "newest_scan": status["newest_scan"]}
+        try:
+            await pool.enqueue_job("train_convlstm_nowcaster", json.dumps(payload), _queue_name="train_queue")
+        except Exception:
+            await pool.delete(convlstm_batch.SCHEDULED_KEY)
+            raise
+        logger.info(f"ConvLSTM retrain queued: {payload}")
+        return {"status": "queued", **payload}
+    except Exception as exc:
+        logger.warning(f"ConvLSTM retrain trigger failed: {exc}")
+        return {"status": f"error: {exc}"}
 
 
 async def collect_inference_results(ctx: dict) -> dict[str, int]:

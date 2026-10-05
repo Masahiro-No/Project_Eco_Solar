@@ -59,6 +59,15 @@ def test_label_overrides_ghi_and_clearsky_ratio():
     assert f0.loc[noon_utc, "GHI"] != 321.0 and not bool(f0["is_label"].any())
 
 
+def test_label_claiming_sunlight_at_night_is_ignored():
+    w = _synthetic_weather(days=1, start="2026-10-02 00:00")
+    night_utc = pd.Timestamp("2026-10-02 16:10", tz="UTC")  # 23:10 เวลาไทย
+    f = build_station_frame(w, labels=pd.Series([579.8, 0.0], index=[night_utc, night_utc + pd.Timedelta(minutes=10)]))
+    assert f.loc[night_utc, "GHI"] == 0.0 and not bool(f.loc[night_utc, "is_label"])
+    # ค่า 0 ตอนกลางคืนเป็นค่าที่วัดได้จริง จึงยังใช้
+    assert bool(f.loc[night_utc + pd.Timedelta(minutes=10), "is_label"])
+
+
 def test_gap_handling_and_windows():
     w = _synthetic_weather(days=4)
     w = w.drop(index=range(300, 302))  # ช่องว่าง 2 ช่อง -> เติมได้
@@ -165,8 +174,8 @@ def test_fine_tune_and_onnx_roundtrip():
 
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "m.onnx"
-        export_onnx(model, out)
-        assert verify_onnx_matches(model, out) <= 1e-4
+        export_onnx(model, out, LOOKBACK_STEPS)
+        assert verify_onnx_matches(model, out, LOOKBACK_STEPS) <= 1e-4
         import onnxruntime as ort
 
         sess = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"])

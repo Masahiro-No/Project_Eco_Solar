@@ -1,17 +1,13 @@
 from fastapi import Depends, HTTPException, status
 
-from core.config import settings
 from api.auth.model import User
 from api.auth.service import require_admin
-from api.jobs.service import JobService
 from api.label_studio.schema import (
     AnnotationResponse,
     CreateAnnotationRequest,
     CreateProjectRequest,
     ImportTaskRequest,
     ProjectResponse,
-    SubmitSatelliteAnnotationRequest,
-    SubmitSatelliteAnnotationResponse,
     TaskResponse,
 )
 from api.label_studio.service import LabelStudioService
@@ -74,18 +70,6 @@ CONFIG_TEMPLATES = {
     <Choice value="High Quality"/>
     <Choice value="Suspected Cloud Enhancement"/>
     <Choice value="Sensor Noise"/>
-  </Choices>
-</View>""",
-
-    # สำหรับตรวจทานภาพเมฆดาวเทียม Himawari
-    "satellite_cloud_verify": """<View>
-  <Header value="Himawari Satellite Cloud Pattern Verification"/>
-  <Image name="satellite_crop" value="$satellite_image"/>
-  <Choices name="cloud_motion" toName="satellite_crop">
-    <Choice value="Clear"/>
-    <Choice value="Inward (Approaching Farm)"/>
-    <Choice value="Outward (Leaving Farm)"/>
-    <Choice value="Overcast (Stationary)"/>
   </Choices>
 </View>"""
 }
@@ -182,94 +166,3 @@ async def create_annotation(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Label Studio error: {e}") from None
     return AnnotationResponse(id=ann.id, task_id=task_id, result=payload.result)
-
-
-async def submit_satellite_annotation(
-    payload: SubmitSatelliteAnnotationRequest,
-    _: User = Depends(require_admin),
-) -> SubmitSatelliteAnnotationResponse:
-    """Submit satellite cloud verification -> Label Studio -> Buffer check -> retrain trigger."""
-    svc = LabelStudioService()
-    project_title = "Himawari Satellite Cloud Pattern Verification"
-    label_cfg = CONFIG_TEMPLATES["satellite_cloud_verify"]
-
-    # 1. Get or create project in Label Studio
-    try:
-        p = svc.get_or_create_project(project_title, label_cfg)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Label Studio project error: {e}") from None
-
-    # 2. Create task
-    task_data = {
-        "station_id": payload.station_id,
-        "timestamp": payload.timestamp,
-        "satellite_image": f"/satellite-cache/{payload.station_id}_latest.png",
-        "cloud_condition": payload.cloud_condition,
-        "cloud_index": payload.cloud_index,
-        "sequence_id": payload.sequence_id,
-    }
-    try:
-        t = svc.create_task(p.id, task_data)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to create task in Label Studio: {e}") from None
-
-    # 3. Create annotation
-    annotation_result = [
-        {
-            "value": {"choices": [payload.cloud_condition]},
-            "from_name": "cloud_motion",
-            "to_name": "satellite_crop",
-            "type": "choices",
-        }
-    ]
-    try:
-        ann = svc.create_annotation(task_id=t.id, result=annotation_result, ground_truth=True)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to create annotation in Label Studio: {e}") from None
-
-    # 4. Check Buffer in Redis
-    retrain_enqueued = False
-    retrain_status = "accumulating"
-    accumulated_count = 1
-    threshold = settings.convlstm_retrain_threshold
-
-    try:
-        pool = await JobService.get_pool()
-        accumulated_count = await pool.incr("convlstm_labeled_buffer_count")
-        await pool.close()
-    except Exception:
-        pass
-
-    if accumulated_count >= threshold:
-        if settings.enable_retrain:
-            try:
-                import json
-                job_payload = {
-                    "station_id": payload.station_id,
-                    "accumulated_count": accumulated_count,
-                    "threshold": threshold,
-                }
-                await JobService.enqueue("train_convlstm_nowcaster", json.dumps(job_payload), queue_name="train_queue")
-                retrain_enqueued = True
-                retrain_status = f"threshold_reached ({accumulated_count}/{threshold}) - enqueued"
-                # Reset counter
-                pool = await JobService.get_pool()
-                await pool.set("convlstm_labeled_buffer_count", 0)
-                await pool.close()
-            except Exception as e:
-                retrain_status = f"enqueue_failed: {e}"
-        else:
-            retrain_status = f"threshold_reached ({accumulated_count}/{threshold}) - retrain_disabled (standby)"
-    else:
-        retrain_status = f"accumulating ({accumulated_count}/{threshold}) - {'ready' if settings.enable_retrain else 'standby'}"
-
-    return SubmitSatelliteAnnotationResponse(
-        task_id=t.id,
-        annotation_id=ann.id,
-        station_id=payload.station_id,
-        accumulated_count=accumulated_count,
-        threshold=threshold,
-        retrain_enqueued=retrain_enqueued,
-        retrain_status=retrain_status,
-    )
-

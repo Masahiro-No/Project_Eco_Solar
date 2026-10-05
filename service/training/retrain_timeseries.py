@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from service.training.dataset import ALIGNED_FEATURE_COLS, FORECAST_STEPS, LOOKBACK_STEPS
+from service.training.dataset import ALIGNED_FEATURE_COLS, FORECAST_STEPS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("RetrainTimeSeries")
@@ -305,14 +305,14 @@ def fine_tune(
     return {"baseline_val_mae": baseline_mae, "best_val_mae": best_mae, "best_epoch": best_epoch, "history": history}
 
 
-def export_onnx(model, path: Path) -> None:
+def export_onnx(model, path: Path, lookback: int) -> None:
     """export ด้วยชื่อ input/output เดียวกับ train.py เพื่อให้ inference worker ใช้ต่อได้ทันที."""
     import torch
 
     model.eval().to("cpu")
     torch.onnx.export(
         model,
-        torch.randn(1, LOOKBACK_STEPS, len(ALIGNED_FEATURE_COLS)),
+        torch.randn(1, lookback, len(ALIGNED_FEATURE_COLS)),
         str(path),
         input_names=["weather_sequence"],
         output_names=["ghi_forecast_18steps"],
@@ -322,12 +322,12 @@ def export_onnx(model, path: Path) -> None:
     )
 
 
-def verify_onnx_matches(model, path: Path, tol: float = 1e-4) -> float:
+def verify_onnx_matches(model, path: Path, lookback: int, tol: float = 1e-4) -> float:
     """เทียบ onnxruntime กับ PyTorch บน input สุ่ม; ถ้าต่างเกิน tol ให้ raise."""
     import onnxruntime as ort
     import torch
 
-    x = np.random.default_rng(0).random((4, LOOKBACK_STEPS, len(ALIGNED_FEATURE_COLS)), dtype=np.float32)
+    x = np.random.default_rng(0).random((4, lookback, len(ALIGNED_FEATURE_COLS)), dtype=np.float32)
     sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     onnx_out = sess.run(None, {sess.get_inputs()[0].name: x})[0]
     with torch.no_grad():
@@ -388,6 +388,7 @@ def execute_timeseries_retrain(
         meta = json.loads((model_dir / "model_meta.json").read_text(encoding="utf-8"))
         feature_scaler = joblib.load(model_dir / "feature_scaler.joblib")
         target_scaler = joblib.load(model_dir / "target_scaler.joblib")
+        lookback = int(meta["lookback_steps"])  # ความยาว input ของโมเดลที่ใช้งานอยู่ (ไม่กำหนดตายตัวในโค้ด)
         logger.info(f"โมเดลปัจจุบัน v{meta.get('version')} trained_at={meta.get('trained_at')} (จาก {source})")
 
         # 4. ข้อมูลจริง -> window
@@ -397,16 +398,16 @@ def execute_timeseries_retrain(
         stride = _env_int("RETRAIN_WINDOW_STRIDE", 2)
         Xs, Ys, starts, has_label = [], [], [], []
         for station_id, frame in frames.items():
-            X, Y, st, hl = make_windows(frame, stride=stride)
+            X, Y, st, hl = make_windows(frame, lookback=lookback, stride=stride)
             logger.info(f"  {station_id}: {len(frame)} ช่องเวลา -> {len(X)} windows")
             if len(X):
                 Xs.append(X), Ys.append(Y), starts.append(st), has_label.append(hl)
         if not Xs:
-            return {"status": "skipped", "reason": "no_complete_windows", "message": "weather_history ไม่พอสำหรับ window 27 ชม."}
+            return {"status": "skipped", "reason": "no_complete_windows", "message": f"weather_history ไม่พอสำหรับ window {(lookback + FORECAST_STEPS) / 6:g} ชม."}
         X_all, Y_all = np.concatenate(Xs), np.concatenate(Ys)
         starts_all, has_label_all = np.concatenate(starts), np.concatenate(has_label)
 
-        train_idx, val_idx = split_by_day(starts_all, has_label_all)
+        train_idx, val_idx = split_by_day(starts_all, has_label_all, lookback=lookback)
         min_val = _env_int("RETRAIN_MIN_VAL_WINDOWS", 50)
         if len(val_idx) < min_val or len(train_idx) == 0:
             return {
@@ -419,7 +420,7 @@ def execute_timeseries_retrain(
 
         def scale_x(X: np.ndarray) -> np.ndarray:
             n = len(X)
-            return feature_scaler.transform(X.reshape(-1, X.shape[-1])).reshape(n, LOOKBACK_STEPS, -1).astype(np.float32)
+            return feature_scaler.transform(X.reshape(-1, X.shape[-1])).reshape(n, lookback, -1).astype(np.float32)
 
         X_va, Y_va_raw = scale_x(X_all[val_idx]), Y_all[val_idx]
         oversample = max(1, _env_int("RETRAIN_LABEL_OVERSAMPLE", 5))
@@ -465,8 +466,8 @@ def execute_timeseries_retrain(
 
         # 6. export + ตรวจ + สำรอง + deploy
         new_onnx = workdir / "new_model.onnx"
-        export_onnx(model, new_onnx)
-        diff = verify_onnx_matches(model, new_onnx)
+        export_onnx(model, new_onnx, lookback)
+        diff = verify_onnx_matches(model, new_onnx, lookback)
 
         backup_dir = backup_local_model(meta.get("trained_at", "unknown"))
         MODELS_DIR.mkdir(parents=True, exist_ok=True)

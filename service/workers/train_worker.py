@@ -450,7 +450,7 @@ async def train_timeseries_lstm(ctx: dict, job_payload_json: str = "{}") -> str:
 
 
 async def train_convlstm_nowcaster(ctx: dict, job_payload_json: str = "{}") -> str:
-    """ARQ Worker Job: Batch retraining for Spatio-temporal Seq2Seq ConvLSTM (Safe Standby)."""
+    """ARQ Worker Job: batch retraining of the ConvLSTM cloud nowcaster on real satellite frames."""
     job_id: str = ctx.get("job_id", datetime.now().strftime("%Y%m%d%H%M%S"))
     logger = setup_logger(job_id)
     logger.info(f">> [ARQ Job] train_convlstm_nowcaster started  job_id={job_id}")
@@ -467,8 +467,10 @@ async def train_convlstm_nowcaster(ctx: dict, job_payload_json: str = "{}") -> s
     except Exception:
         payload = {}
 
-    result = execute_convlstm_retrain(payload)
+    import asyncio
+    result = await asyncio.to_thread(execute_convlstm_retrain, payload)  # heavy/blocking: keep the worker's event loop free
+    result.pop("history", None)
     logger.info(f"[ARQ Job] train_convlstm_nowcaster result: {result}")
     import json
-    return json.dumps(result)
+    return json.dumps(result, default=str)
 

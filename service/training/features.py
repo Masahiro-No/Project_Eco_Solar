@@ -17,6 +17,8 @@ from service.training.dataset import ALIGNED_FEATURE_COLS, FORECAST_STEPS, LOOKB
 SLOT = "10min"
 TH_OFFSET = pd.Timedelta(hours=7)
 SPAN = LOOKBACK_STEPS + FORECAST_STEPS  # 162 ช่อง ต่อ 1 window
+NIGHT_CLEARSKY_GHI = 10.0   # W/m²: ต่ำกว่านี้ถือว่าดวงอาทิตย์ตกแล้ว
+NIGHT_LABEL_MAX_GHI = 20.0  # W/m²: ค่า "วัดจริง" ที่สูงกว่านี้ตอนกลางคืนเป็นไปไม่ได้ จึงไม่นำมาใช้
 MAX_GAP_FILL = 2  # เติมช่องว่างสั้น ๆ (<= 20 นาที) ด้วย linear interpolation เท่านั้น
 
 _RAW_COLS = [
@@ -57,6 +59,9 @@ def build_station_frame(
         lab.index = pd.to_datetime(lab.index, utc=True).floor(SLOT)  # label: ปัด "ลง" เป็นช่อง 10 นาที (xx:x5 -> xx:x0)
         lab = lab[~lab.index.duplicated(keep="last")]
         lab = lab[lab.index.isin(df.index)]
+        # label ที่บอกว่ามีแดดตอนกลางคืน (GHI ฟ้าใส < 10 W/m²) ไม่ใช่ค่าที่วัดได้จริง: ไม่ใช้
+        night = (df.loc[lab.index, "clearsky_ghi"] < NIGHT_CLEARSKY_GHI).values
+        lab = lab[~(night & (lab.values > NIGHT_LABEL_MAX_GHI))]
         df.loc[lab.index, "ghi"] = lab.values
         is_label.loc[lab.index] = True
 

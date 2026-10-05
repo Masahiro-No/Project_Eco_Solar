@@ -54,26 +54,6 @@ class SubmitGroundTruthResponse(BaseModel):
     retrain_status: str
 
 
-class SubmitSatelliteAnnotationRequest(BaseModel):
-    """Payload สำหรับส่งผลการตรวจสอบภาพถ่ายดาวเทียม (Non-time-series)."""
-    station_id: str
-    timestamp: str
-    cloud_condition: str  # Clear, Inward, Outward, Overcast
-    cloud_index: float | None = None
-    sequence_id: str | None = None
-    notes: str | None = None
-
-
-class SubmitSatelliteAnnotationResponse(BaseModel):
-    task_id: int
-    annotation_id: int
-    station_id: str
-    accumulated_count: int
-    threshold: int
-    retrain_enqueued: bool
-    retrain_status: str
-
-
 class GroundTruthItem(BaseModel):
     timestamp: str  # ISO-8601; ไม่มี timezone = เวลาไทย (UTC+7); ระบบปัดลงเป็นช่อง 10 นาที
     ghi_actual: float

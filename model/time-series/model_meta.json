@@ -2,9 +2,9 @@
   "model_name": "solar_ghi_lstm",
   "format": "ONNX",
   "file_name": "solar_ghi_lstm.onnx",
-  "size_bytes": 869813,
-  "version": "1.0.0",
-  "trained_at": "2026-09-30 08:10:52 UTC",
+  "size_bytes": 869811,
+  "version": "1.1.1",
+  "trained_at": "2026-10-05 01:31:52 UTC",
   "input_features": [
     "GHI",
     "DNI",
@@ -23,26 +23,63 @@
     "month_sin",
     "month_cos"
   ],
-  "lookback_steps": 144,
+  "lookback_steps": 36,
   "forecast_steps": 18,
   "resolution_minutes": 10,
   "test_metrics": {
-    "mae": 39.495,
-    "rmse": 84.338,
-    "r2": 0.9241,
-    "nrmse_pct": 18.44
+    "mae": 40.901,
+    "rmse": 84.569,
+    "r2": 0.9237,
+    "nrmse_pct": 18.49
   },
   "step_metrics": {
-    "test_rmse_plus_10min": 53.6,
-    "test_mae_plus_10min": 23.45,
-    "test_rmse_plus_30min": 70.38,
-    "test_mae_plus_30min": 32.12,
-    "test_rmse_plus_60min": 80.43,
-    "test_mae_plus_60min": 37.47,
-    "test_rmse_plus_120min": 90.26,
-    "test_mae_plus_120min": 43.0,
-    "test_rmse_plus_180min": 96.2,
-    "test_mae_plus_180min": 47.12
+    "test_rmse_plus_10min": 54.11,
+    "test_mae_plus_10min": 24.53,
+    "test_rmse_plus_30min": 70.12,
+    "test_mae_plus_30min": 33.03,
+    "test_rmse_plus_60min": 80.35,
+    "test_mae_plus_60min": 37.98,
+    "test_rmse_plus_120min": 90.82,
+    "test_mae_plus_120min": 45.44,
+    "test_rmse_plus_180min": 96.43,
+    "test_mae_plus_180min": 48.74
   },
-  "device_trained": "cuda"
+  "daylight_metrics": {
+    "test_day_mae": 82.598,
+    "test_day_rmse": 120.201,
+    "test_day_share_pct": 49.5,
+    "test_day_mae_plus_10min": 49.52,
+    "test_day_rmse_plus_10min": 76.91,
+    "test_day_mae_plus_30min": 66.69,
+    "test_day_rmse_plus_30min": 99.66,
+    "test_day_mae_plus_60min": 76.68,
+    "test_day_rmse_plus_60min": 114.19,
+    "test_day_mae_plus_120min": 91.77,
+    "test_day_rmse_plus_120min": 129.1,
+    "test_day_mae_plus_180min": 98.45,
+    "test_day_rmse_plus_180min": 137.08
+  },
+  "best_epoch": 6,
+  "train_minutes": 4.55,
+  "seed": 42,
+  "device_trained": "cuda",
+  "retrain": {
+    "previous_version": "1.1.0",
+    "previous_trained_at": "2026-10-04 14:50:33 UTC",
+    "val_mae_before": 33.536,
+    "val_mae_after": 25.323,
+    "train_windows": 2296,
+    "val_windows": 452,
+    "lookback_days": 45,
+    "stations": [
+      "ST-001",
+      "ST-002",
+      "ST-003",
+      "ST-004",
+      "ST-005",
+      "ST-TEST-65065",
+      "ST-TEST-99"
+    ],
+    "onnx_max_diff": 1.1920928955078125e-07
+  }
 }

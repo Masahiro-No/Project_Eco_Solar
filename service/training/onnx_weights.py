@@ -79,19 +79,18 @@ def load_onnx_into_model(model: torch.nn.Module, onnx_path: str) -> torch.nn.Mod
     return model
 
 
-def check_equivalence(onnx_path: str, n_samples: int = 8, seed: int = 0) -> float:
+def check_equivalence(onnx_path: str, n_samples: int = 8, seed: int = 0, lookback: int = 144) -> float:
     """เทียบ output PyTorch กับ onnxruntime คืนค่า max |diff| (หน่วยเดียวกับ output)."""
     import onnxruntime as ort
 
     from service.models.solar_lstm import SolarLSTMForecaster
-    from service.training.dataset import LOOKBACK_STEPS
 
     model = SolarLSTMForecaster()
     load_onnx_into_model(model, onnx_path)
     model.eval()
 
     rng = np.random.default_rng(seed)
-    x = rng.random((n_samples, LOOKBACK_STEPS, 16), dtype=np.float32)
+    x = rng.random((n_samples, lookback, 16), dtype=np.float32)
 
     sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
     in_name = sess.get_inputs()[0].name
@@ -106,9 +105,10 @@ def _main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--onnx", required=True)
     p.add_argument("--tol", type=float, default=1e-4)
+    p.add_argument("--lookback", type=int, default=144, help="input length of the model (lookback_steps in model_meta.json)")
     args = p.parse_args()
 
-    diff = check_equivalence(args.onnx)
+    diff = check_equivalence(args.onnx, lookback=args.lookback)
     status = "PASS" if diff <= args.tol else "FAIL"
     print(f"max|onnxruntime - pytorch| = {diff:.3e}  (tol {args.tol:.0e})  -> {status}")
     raise SystemExit(0 if status == "PASS" else 1)

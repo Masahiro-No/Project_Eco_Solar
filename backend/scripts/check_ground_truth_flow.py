@@ -237,6 +237,7 @@ async def check_http_flow():
         return pool
 
     JobService.get_pool = staticmethod(_pool)
+    settings.enable_retrain = False  # เริ่มจากสถานะปิด retrain เสมอ ไม่ขึ้นกับค่า ENABLE_RETRAIN ของ container
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         # --- วิธีที่ 1: ดึงค่าพยากรณ์ของวัน

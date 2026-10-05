@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     enable_retrain: bool = False
     retrain_debounce_seconds: int = 300  # รอรวม label ที่ส่งใกล้กันก่อนเริ่ม retrain
-    convlstm_retrain_threshold: int = 50
+    convlstm_retrain_threshold: int = 50  # new daytime satellite scans that make one ConvLSTM retrain batch
     # admin account created at startup when a password is configured (ADMIN_PASSWORD in the root .env)
     admin_email: str = "admin@solardss.io"
     admin_password: Optional[str] = None
