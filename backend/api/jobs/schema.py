@@ -1,36 +1,12 @@
-from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
-
-
-class EnqueueRequest(BaseModel):
-    function_name: str
-    job_data: str
-
-
-class EnqueueResponse(BaseModel):
-    job_id: str
-    status: str = "queued"
 
 
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
     result: Optional[str] = None
-
-
-class TrainRequest(BaseModel):
-    model_type: str = "lstm"  # "lstm" or "convlstm"
-    epochs: int = 10
-    batch_size: int = 32
-    start_time: Optional[datetime] = None
-
-
-class TrainResponse(BaseModel):
-    job_id: str
-    status: str = "queued"
-    scheduled_at: Optional[datetime] = None
 
 
 # ─── Redis Queue Management Schemas ──────────────────────────────────────────

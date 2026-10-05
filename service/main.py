@@ -9,14 +9,10 @@ except ImportError:
     run_inference = None
 
 try:
-    from service.workers.simple_worker import simple_work
-    from service.workers.train_worker import train_convlstm_nowcaster, train_model, train_timeseries_lstm
+    from service.workers.train_worker import train_convlstm_nowcaster, train_timeseries_lstm
 except ImportError:
-    simple_work = None
-    train_model = None
     train_timeseries_lstm = None
     train_convlstm_nowcaster = None
-
 
 
 def _redis_settings() -> RedisSettings:
@@ -37,11 +33,11 @@ def _redis_settings() -> RedisSettings:
 
 
 class WorkerSettings:
-    """Settings สำหรับ Trainer Worker (GPU Dedicated สำหรับเทรนโมเดลล้วนๆ)"""
+    """Settings สำหรับ Trainer Worker (retrain LSTM และ ConvLSTM)"""
     queue_name = "train_queue"
     job_timeout = 3600  # retrain LSTM อาจนานเกิน default 300 วินาที
     max_tries = 1  # ไม่ retry อัตโนมัติ (retrain ซ้ำทำให้เปลืองและอาจชนล็อก)
-    functions = [f for f in [simple_work, train_model, train_timeseries_lstm, train_convlstm_nowcaster] if f is not None]
+    functions = [f for f in [train_timeseries_lstm, train_convlstm_nowcaster] if f is not None]
     redis_settings = _redis_settings()
 
 

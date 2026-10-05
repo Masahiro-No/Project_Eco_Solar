@@ -6,6 +6,19 @@ GET,/api/users,Get All Users,,users,Yes
 GET,/api/users/{user_id},Get User,,users,Yes
 PATCH,/api/users/{user_id},Update User,,users,Yes
 DELETE,/api/users/{user_id},Delete User,,users,Yes
+GET,/api/stations,List Active Solar Stations,ดึงรายชื่อสถานีโซลาร์ฟาร์มทั้งหมด พร้อมข้อมูลกำลังผลิตจริงจากฐานข้อมูล,stations,Yes
+POST,/api/stations,Create New Solar Station,ลงทะเบียนสถานีโรงไฟฟ้าโซลาร์แห่งใหม่,stations,Yes
+GET,/api/stations/archived,List Archived / Soft-Deleted Stations,ดึงรายชื่อสถานีที่ถูกระงับการใช้งาน (Soft-deleted) ทั้งหมด,stations,Yes
+GET,/api/stations/nearest,Find Nearest Solar Station by Coordinates,ค้นหาสถานีโซลาร์ฟาร์มที่อยู่ใกล้พิกัด Latitude/Longitude มากที่สุด (Nearest Mapping),stations,Yes
+GET,/api/stations/{station_id},Get Station Detail by ID,ดึงข้อมูลรายละเอียดและสเปกของสถานีตาม ID พร้อมค่ากำลังผลิตล่าสุด,stations,Yes
+PUT,/api/stations/{station_id},Full Update Station Spec,อัปเดตข้อมูลสเปกของสถานีทั้งหมด (Full Update),stations,Yes
+PATCH,/api/stations/{station_id},Partial Update Station Spec,แก้ไขเฉพาะบางฟิลด์ของสถานี (Partial Update),stations,Yes
+DELETE,/api/stations/{station_id},Soft-Delete / Deactivate Station,ปิดการใช้งานสถานีชั่วคราว (Soft-Delete) โดยไม่ลบประวัติใน DB,stations,Yes
+PATCH,/api/stations/{station_id}/restore,Restore Soft-Deleted Station,กู้คืนสถานีที่เคยถูกระงับการใช้งานกลับมาทำงานใหม่ (Restore),stations,Yes
+GET,/api/dashboard/summary,System-wide Dashboard Overview (KPI Cards),"สรุปภาพรวมทั้งระบบขึ้นหน้าแรก (KPI Cards, กำลังผลิตรวม, ความเสี่ยงรวม)",dashboard,Yes
+GET,/api/dashboard/alerts,Real-time Alert Feeds for Critical / Warning Stations,ดึงรายการแจ้งเตือนด่วน (Real-time Alert Feeds) ที่ต้องการเฝ้าระวังหรือเร่งสำรองไฟ,dashboard,Yes
+GET,/api/dashboard/grafana-links,Get Observability Grafana Dashboard Links,ดึง URL สำหรับ Embed หรือเปิดดู Grafana Dashboards,dashboard,Yes
+GET,/api/dashboard/station/{station_id},Station-Specific Dashboard Detail (Forecast Curve + Cloud Trend),"ดึงข้อมูลแดชบอร์ดเฉพาะสถานี (กราฟพยากรณ์ 3 ชม., ทัศนวิสัยเมฆ, คำแนะนำ ΔP)",dashboard,Yes
 GET,/api/storage/buckets,List Buckets,,storage,Yes
 POST,/api/storage/buckets,Create Bucket,,storage,Yes
 POST,/api/storage/upload,Upload File,,storage,Yes
@@ -15,6 +28,30 @@ GET,/api/label-studio/projects,List Projects,,label-studio,Yes
 POST,/api/label-studio/projects,Create Project,,label-studio,Yes
 GET,/api/label-studio/projects/{project_id}/tasks,List Tasks,,label-studio,Yes
 POST,/api/label-studio/projects/{project_id}/tasks,Create Task,,label-studio,Yes
-POST,/api/jobs/,Enqueue Job,,jobs,Yes
-GET,/api/jobs/{job_id},Get Job Status,,jobs,Yes
+GET,/api/label-studio/projects/{project_id}/tasks/{task_id}/annotations,List Annotations,,label-studio,Yes
+POST,/api/label-studio/projects/{project_id}/tasks/{task_id}/annotations,Create Annotation,,label-studio,Yes
+POST,/api/label-studio/ground-truth/submit,Submit Ground Truth,ส่ง GHI จริง 1 ค่า -> Label Studio (สร้าง/อัปเดต) -> นัด retrain.,label-studio,Yes
+POST,/api/label-studio/ground-truth/batch-submit,Batch Submit Ground Truth,ส่ง GHI จริงหลายค่า (จากตารางหน้าเว็บ).,label-studio,Yes
+POST,/api/label-studio/ground-truth/upload/preview,Preview Ground Truth File,อ่านหัวตาราง + ตัวอย่างแถวของไฟล์ และเดาคอลัมน์เวลา/GHI ให้ผู้ใช้เลือกยืนยัน.,label-studio,Yes
+POST,/api/label-studio/ground-truth/upload,Upload Ground Truth File,นำเข้า GHI จริงจากไฟล์ CSV/XLSX เฉพาะแถวที่อยู่ในวันที่เลือก (เวลาไทย) ตามคอลัมน์ที่ผู้ใช้ระบุ.,label-studio,Yes
+GET,/api/jobs/queues,Summary of All Redis Task Queues,"สรุปภาพรวมของทุกคิวใน Redis (จำนวนงานที่รอ, กำลังรัน, พัง)",jobs,Yes
+GET,/api/jobs/queues/{name}/jobs,List Pending Jobs in a Specific Queue,ดูรายการ Job ทั้งหมดที่ค้างอยู่ในคิวที่เลือก,jobs,Yes
+DELETE,/api/jobs/queues/{name}/clear,Clear / Flush All Pending Jobs in a Queue,ล้างคิวงานทั้งหมด (Flush Pending Jobs),jobs,Yes
+POST,/api/jobs/{job_id}/retry,Retry a Failed Job,สั่งให้ Job ที่เคย Failed รันใหม่อีกครั้ง,jobs,Yes
+GET,/api/jobs/{job_id},Get Job Status and Result,,jobs,Yes
+DELETE,/api/jobs/{job_id},Cancel / Remove Job from Queue,ยกเลิก / ลบ Job ออกจากคิวทันท่วงที (Cancel Job),jobs,Yes
+POST,/api/inference/predict,Enqueue 3-Hour Solar Forecast Request,สั่งคำขอพยากรณ์ไฟฟ้าล่วงหน้า 3 ชม. (Enqueue to inference_queue),inference,Yes
+GET,/api/inference/result/{job_id},Get Forecast Result by Job ID,ดึงผลลัพธ์การพยากรณ์เมื่อ Worker ประมวลผลเสร็จ,inference,Yes
+GET,/api/inference/latest/{station_id},Get Latest Pre-computed Forecast for Station Dashboard,ดึงผลการพยากรณ์รอบล่าสุดของสถานีขึ้นแสดงบน Dashboard ทันที,inference,Yes
+GET,/api/inference/history/{station_id},Get Historical Forecasts for Comparison,ดึงประวัติผลพยากรณ์ย้อนหลังเพื่อนำไปพลอตกราฟเปรียบเทียบ,inference,Yes
+GET,/api/inference/predictions-by-date,"Forecasts of a day aligned to real time, with ground-truth labels",ค่าพยากรณ์ + GHI จาก weather_history ของวันที่เลือก (เรียงตามเวลาจริง) + ค่าจริงที่ label ไว้แล้ว สำหรับหน้า labeling.,inference,Yes
+POST,/api/ingestion/trigger,Trigger Real-time Weather & Satellite Ingestion,สั่งดึงข้อมูลสภาพอากาศแบบ Real-time (Open-Meteo) และภาพดาวเทียม Himawari (NICT) เข้าสู่ระบบทันที,ingestion,Yes
+POST,/api/ingestion/catchup,Trigger Auto Catch-up / Gap Backfill for Station,สั่งตรวจสอบ Gap ของข้อมูลและดึงข้อมูลย้อนหลังทั้ง Weather Time-Series และภาพถ่ายดาวเทียม 12 เฟรมอัตโนมัติ,ingestion,Yes
+GET,/api/ingestion/weather/{station_id}/recent,Get Normalized Weather Time-series for Station,ดึงข้อมูลสภาพอากาศย้อนหลังระดับ Canonical Schema เพื่อใช้เป็น Input สำหรับโมเดล LSTM,ingestion,Yes
+GET,/api/ingestion/satellite/{station_id}/frames,Get Recent Satellite Frame Sequences,ดึงประวัติ URL ภาพถ่ายดาวเทียม Himawari ล่าสุดเพื่อใช้ส่งให้ ConvLSTM Cloud Motion Model,ingestion,Yes
+GET,/api/ingestion/status,Get Ingestion Health & Metrics,"ตรวจสอบสถานะสุขภาพและการเชื่อมต่อ Data Source (Open-Meteo, NICT Himawari) และจำนวนข้อมูลในระบบ",ingestion,Yes
+GET,/api/ingestion/satellite/{station_id}/latest.png,Newest real satellite crop around a station (PNG),ภาพดาวเทียมจริงล่าสุดรอบสถานี (true-colour 64x64 พิกเซล) ที่ inference worker เก็บไว้ใน MinIO.,ingestion,Yes
+GET,/api/frame-review/frames,List Frames,"Real daytime satellite frames of one station and day, with automatic hints and the saved reviews.",frame-review,Yes
+POST,/api/frame-review/frames,Submit Reviews,Save the reviewer's verdicts. Rejected frames are left out of the next ConvLSTM retrain.,frame-review,Yes
+GET,/api/frame-review/status,Convlstm Status,"Batch counter of new satellite scans, the deployed ConvLSTM and the result of the last retrain.",frame-review,Yes
 GET,/health,Health Check,ตรวจสอบว่า API server ทำงานปกติ,system,No

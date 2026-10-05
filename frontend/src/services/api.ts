@@ -134,39 +134,6 @@ export interface PredictionResultData {
 // Dashboard API Schemas (api/dashboard/schema.py)
 // ==========================================
 
-export interface AlertBreakdown {
-  green: number;
-  yellow: number;
-  red: number;
-}
-
-export interface DashboardSummaryResponse {
-  total_power_kw: number;
-  total_target_kw: number;
-  total_delta_p_kw: number;
-  active_stations_count: number;
-  alert_summary: AlertBreakdown;
-  last_updated: string;
-}
-
-export interface StationDashboardResponse {
-  station_id: string;
-  station_name: string;
-  latitude: number;
-  longitude: number;
-  target_capacity_kw: number;
-  current_ghi_w_m2: number;
-  forecast_curve_3h: number[];
-  cloud_trend: string;
-  cloud_coverage_now_pct?: number | null;
-  estimated_power_kw: number;
-  delta_p_kw: number;
-  alert_level: string;
-  recommendation_text: string;
-  satellite_image_url?: string;
-  last_updated: string;
-}
-
 export interface AlertFeedItem {
   station_id: string;
   station_name: string;
@@ -182,18 +149,6 @@ export interface AlertFeedItem {
 // ==========================================
 
 export const solarApi = {
-  /**
-   * Check if backend API server is online and responding
-   */
-  async checkHealth(): Promise<boolean> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/health`, { method: 'GET', cache: 'no-store' });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  },
-
   // ----------------------------------------
   // Stations API (api/stations/router.py)
   // ----------------------------------------
@@ -380,48 +335,6 @@ export const solarApi = {
   },
 
   // ----------------------------------------
-  // Dashboard API (api/dashboard/router.py)
-  // ----------------------------------------
-
-  /**
-   * GET /api/dashboard/summary - Aggregate system status from Backend DB
-   */
-  async getDashboardSummary(): Promise<DashboardSummaryResponse | null> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/dashboard/summary`, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.error('[solarApi.getDashboardSummary] Error:', err);
-    }
-    return null;
-  },
-
-  /**
-   * GET /api/dashboard/station/{id} - Specific station live dashboard from Backend DB
-   */
-  async getStationDashboard(stationId: string): Promise<StationDashboardResponse | null> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/dashboard/station/${stationId}`, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.error(`[solarApi.getStationDashboard] Error for ${stationId}:`, err);
-    }
-    return null;
-  },
-
-  // ----------------------------------------
   // Inference API (api/inference/router.py)
   // ----------------------------------------
 
@@ -440,25 +353,6 @@ export const solarApi = {
       }
     } catch (err) {
       console.info(`[solarApi.getLatestPrediction] Could not fetch live prediction for ${stationId}:`, err);
-    }
-    return null;
-  },
-
-  /**
-   * Get forecast results by Job ID
-   */
-  async getResultByJobId(jobId: string): Promise<{ status: string; result?: PredictionResultData } | null> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/inference/result/${jobId}`, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.info(`[solarApi.getResultByJobId] Could not fetch result for ${jobId}:`, err);
     }
     return null;
   },

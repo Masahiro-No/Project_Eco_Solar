@@ -5,37 +5,12 @@ from api.auth.service import require_admin
 from api.jobs.schema import (
     CancelJobResponse,
     ClearQueueResponse,
-    EnqueueRequest,
-    EnqueueResponse,
     JobStatusResponse,
     QueueJobsResponse,
     QueueSummaryResponse,
     RetryJobResponse,
-    TrainRequest,
-    TrainResponse,
 )
 from api.jobs.service import JobService
-
-
-async def enqueue_job(
-    payload: EnqueueRequest,
-    _: User = Depends(require_admin),
-) -> EnqueueResponse:
-    job_id = await JobService.enqueue(payload.function_name, payload.job_data)
-    return EnqueueResponse(job_id=job_id)
-
-
-async def enqueue_train_job(
-    payload: TrainRequest,
-    _: User = Depends(require_admin),
-) -> TrainResponse:
-    job_id = await JobService.enqueue_train(
-        payload.model_type,
-        payload.epochs,
-        payload.batch_size,
-        payload.start_time,
-    )
-    return TrainResponse(job_id=job_id, scheduled_at=payload.start_time)
 
 
 async def get_job_status(

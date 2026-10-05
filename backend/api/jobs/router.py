@@ -3,8 +3,6 @@ from fastapi import APIRouter, status
 from api.jobs.controller import (
     cancel_job,
     clear_queue,
-    enqueue_job,
-    enqueue_train_job,
     get_all_queues_summary,
     get_job_status,
     get_queue_jobs,
@@ -13,12 +11,10 @@ from api.jobs.controller import (
 from api.jobs.schema import (
     CancelJobResponse,
     ClearQueueResponse,
-    EnqueueResponse,
     JobStatusResponse,
     QueueJobsResponse,
     QueueSummaryResponse,
     RetryJobResponse,
-    TrainResponse,
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -47,22 +43,6 @@ router.add_api_route(
     response_model=ClearQueueResponse,
     status_code=status.HTTP_200_OK,
     summary="Clear / Flush All Pending Jobs in a Queue",
-)
-router.add_api_route(
-    "/train",
-    enqueue_train_job,
-    methods=["POST"],
-    response_model=TrainResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Enqueue Model Training Job",
-)
-router.add_api_route(
-    "",
-    enqueue_job,
-    methods=["POST"],
-    response_model=EnqueueResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Enqueue Generic Job",
 )
 router.add_api_route(
     "/{job_id}/retry",
