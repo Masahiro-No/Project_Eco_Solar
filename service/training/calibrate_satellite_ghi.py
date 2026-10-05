@@ -12,9 +12,14 @@ which the inference worker reads on its next job.
 
 This is how human-provided measurements improve the satellite branch: every uploaded GHI file adds pairs.
 
+The fitted line is applied to every station. `--check` measures how far it is off at each station that has
+measured GHI, without changing the line, and records that in the file (`checked`): the web page then says
+whether the relation was compared with the sensor of the station on screen.
+
 CLI (trainer container, /workspace):
     python -m service.training.calibrate_satellite_ghi            # report only
     python -m service.training.calibrate_satellite_ghi --write    # also write the calibration file
+    python -m service.training.calibrate_satellite_ghi --check    # error of the current line per station -> `checked`
 """
 
 import argparse
@@ -101,13 +106,45 @@ def fit(pairs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def check(pairs: list[dict[str, Any]], current: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Error of the line in `current` at every station with at least MIN_PAIRS measured slots."""
+    intercept, slope = float(current["intercept"]), float(current["slope"])
+    k_min, k_max = float(current.get("k_min", K_MIN)), float(current.get("k_max", K_MAX))
+    fitted_on = set(current.get("stations") or [])
+    checked: dict[str, dict[str, Any]] = {}
+    for station in sorted({p["station_id"] for p in pairs}):
+        mine = [p for p in pairs if p["station_id"] == station]
+        if len(mine) < MIN_PAIRS:
+            continue
+        rho = np.array([p["rho"] for p in mine])
+        k = np.array([p["k"] for p in mine])
+        checked[station] = {
+            "fitted": station in fitted_on,
+            "pairs": int(len(mine)),
+            "days": int(len({p["time"].strftime("%Y-%m-%d") for p in mine})),
+            "mae": round(float(np.mean(np.abs(np.clip(intercept - slope * rho, k_min, k_max) - k))), 4),
+            "mae_constant_mean": round(float(np.mean(np.abs(k - k.mean()))), 4),
+            "measured_k_mean": round(float(k.mean()), 3),
+            "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        }
+    return checked
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fit the satellite brightness -> clear-sky index relation on measured GHI")
     parser.add_argument("--lookback-days", type=int, default=45)
     parser.add_argument("--write", action="store_true", help="write model/satellite/ghi_calibration.json")
+    parser.add_argument("--check", action="store_true", help="keep the line; record its error per station in the file")
     args = parser.parse_args()
 
     pairs = collect_pairs(args.lookback_days)
+    if args.check:
+        current = json.loads(CALIBRATION_FILE.read_text(encoding="utf-8"))
+        current["checked"] = check(pairs, current)
+        print(json.dumps(current["checked"], indent=2))
+        CALIBRATION_FILE.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+        print(f"written to {CALIBRATION_FILE} (line unchanged: {current['intercept']} - {current['slope']} * rho)")
+        return
     if len(pairs) < MIN_PAIRS:
         raise SystemExit(f"only {len(pairs)} measured slots have a real frame (need {MIN_PAIRS}): nothing fitted")
     result = fit(pairs)

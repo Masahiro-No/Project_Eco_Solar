@@ -49,26 +49,32 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def calibrated_stations() -> Optional[set[str]]:
-    """Stations whose measured GHI the satellite relation was fitted on (model/satellite/ghi_calibration.json).
+def calibration_checks() -> Optional[dict[str, dict[str, Any]]]:
+    """Stations where the satellite relation was compared with measured GHI (model/satellite/ghi_calibration.json).
 
+    {station: {"fitted": bool, "pairs": int | None, "mae": float | None}}: fitted = the line was fitted on this
+    station; otherwise the line of another station was checked here (`calibrate_satellite_ghi --check`).
     None when there is no calibration file. The relation is applied to every station; this only tells the
-    operator where it has been checked against a real sensor.
+    operator where it has been compared with a real sensor.
     """
     for d in (os.environ.get("SOLAR_MODEL_ROOT"), "/app/model", "/workspace/model", str(Path(__file__).resolve().parents[3] / "model")):
         if not d:
             continue
         try:
             with open(Path(d) / "satellite" / "ghi_calibration.json", "r", encoding="utf-8") as f:
-                return set(json.load(f).get("stations") or [])
+                data = json.load(f)
         except (OSError, ValueError):
             continue
+        checks = {s: {"fitted": True, "pairs": None, "mae": None} for s in data.get("stations") or []}
+        for station, c in (data.get("checked") or {}).items():
+            checks[station] = {"fitted": bool(c.get("fitted")) or station in checks, "pairs": c.get("pairs"), "mae": c.get("mae")}
+        return checks
     return None
 
 
 def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:
     level = pred.cloud_trend if pred.cloud_trend in ("low", "medium", "high") else None
-    verified_at = calibrated_stations()
+    checks = calibration_checks()
     return PredictionResultData(
         job_id=pred.job_id,
         station_id=pred.station_id,
@@ -82,7 +88,8 @@ def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:
         cloud_coverage_now_pct=pred.cloud_coverage_now_pct,
         sat_ghi_loss_pct=pred.sat_ghi_loss_pct,
         sat_ghi_loss_now_pct=pred.sat_ghi_loss_now_pct,
-        sat_calibration_verified=None if verified_at is None else pred.station_id in verified_at,
+        sat_calibration_verified=None if checks is None else pred.station_id in checks,
+        sat_calibration_check=None if checks is None else checks.get(pred.station_id),
         target_profile_kw=pred.target_profile_kw,
         ghi_forecast_lower=pred.ghi_forecast_lower,
         ghi_forecast_upper=pred.ghi_forecast_upper,
