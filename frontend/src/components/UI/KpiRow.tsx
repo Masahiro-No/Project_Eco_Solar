@@ -23,7 +23,9 @@ export function KpiRow() {
   const night = !!prediction?.is_night;
   const target = prediction?.target_power_kw ?? selectedStation?.target_capacity_kw ?? null;
   const pgen = prediction ? prediction.estimated_power_kw : null;
-  const pct = pgen !== null && target ? Math.round((pgen / target) * 100) : null;
+  // the target follows the sun: compare with what is expected at this time, not with the full dispatch target
+  const targetNow = prediction?.target_profile_kw?.[0] ?? target;
+  const pct = pgen !== null && targetNow ? Math.round((pgen / targetNow) * 100) : null;
 
   const tiles: Tile[] = [
     {
@@ -39,7 +41,12 @@ export function KpiRow() {
       label: t('kpi_ptarget'),
       help: t('help_ptarget'),
       value: target,
-      note: selectedStation ? selectedStation.id : t('no_data'),
+      note:
+        prediction && !night && prediction.target_profile_kw?.length
+          ? t('target_now_note', { kw: Math.round(prediction.target_profile_kw[0]).toLocaleString() })
+          : selectedStation
+          ? selectedStation.id
+          : t('no_data'),
       icon: TargetIcon,
     },
     {

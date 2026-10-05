@@ -43,13 +43,13 @@ export const CLOUD_UI: Record<CloudImpactLevel, { tone: Tone; icon: LucideIcon; 
   high: { tone: 'bad', icon: CloudIcon, labelKey: 'cloud_high' },
 };
 
-/** Cloud cover in the area around the station, in %, at which GHI is expected to drop by 10% and 30% (Kasten & Czeplak 1980). */
-export const CLOUD_MEDIUM_FROM_PCT = 55;
-export const CLOUD_HIGH_FROM_PCT = 76;
+/** Expected loss of irradiance (%) at which the impact level changes (same limits as the backend). */
+export const LOSS_MEDIUM_FROM_PCT = 10;
+export const LOSS_HIGH_FROM_PCT = 30;
 
-export function cloudLevelOf(pct: number | null | undefined): CloudImpactLevel | null {
-  if (pct === null || pct === undefined) return null;
-  if (pct >= CLOUD_HIGH_FROM_PCT) return 'high';
-  if (pct >= CLOUD_MEDIUM_FROM_PCT) return 'medium';
+export function impactLevelOfLoss(lossPct: number | null | undefined): CloudImpactLevel | null {
+  if (lossPct === null || lossPct === undefined) return null;
+  if (lossPct > LOSS_HIGH_FROM_PCT) return 'high';
+  if (lossPct >= LOSS_MEDIUM_FROM_PCT) return 'medium';
   return 'low';
 }

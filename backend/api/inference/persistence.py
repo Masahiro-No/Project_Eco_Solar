@@ -66,6 +66,7 @@ async def save_model_prediction(
 
     reserve = result.get("reserve_kw")
     cloud_now = result.get("cloud_coverage_now_pct")
+    loss_now = result.get("sat_ghi_loss_now_pct")
     pred = Prediction(
         job_id=job_id,
         station_id=station_id,
@@ -81,6 +82,9 @@ async def save_model_prediction(
         cloud_trend=str(result.get("cloud_impact_level") or "unknown"),
         cloud_coverage_pct=_floats(result.get("cloud_coverage_pct")),
         cloud_coverage_now_pct=float(cloud_now) if cloud_now is not None else None,
+        sat_ghi_loss_pct=_floats(result.get("sat_ghi_loss_pct")),
+        sat_ghi_loss_now_pct=float(loss_now) if loss_now is not None else None,
+        target_profile_kw=_floats(result.get("target_profile_kw")),
         satellite_status=result.get("satellite_status"),
         satellite_lag_minutes=result.get("satellite_lag_minutes"),
         alert_level=str(result["alert_level"]),

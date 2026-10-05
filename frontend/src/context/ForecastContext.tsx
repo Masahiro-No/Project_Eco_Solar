@@ -14,11 +14,14 @@ export type GhiChartPoint = {
   weightPct: number | null;
   /** Forecast cloud cover in the area around the station, in % */
   cloudPct: number | null;
+  /** Expected loss of GHI against clear sky from the satellite branch, in % */
+  lossPct: number | null;
 };
 
 export type PowerChartPoint = {
   t: string;
   gen: number;
+  /** Target at this time: follows the sun, never above P_target */
   target: number;
 };
 
@@ -156,12 +159,14 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
       const lstm = prediction.ghi_forecast_lstm_raw?.[i];
       const w = prediction.blend_weight?.[i];
       const c = prediction.cloud_coverage_pct?.[i];
+      const loss = prediction.sat_ghi_loss_pct?.[i];
       return {
         t: forecastTimeLabel(base, i + 1),
         blend: Math.round(v),
         lstm: lstm === undefined || lstm === null ? null : Math.round(lstm),
         weightPct: w === undefined || w === null ? null : Math.round(w * 100),
         cloudPct: c === undefined || c === null ? null : Math.round(c),
+        lossPct: loss === undefined || loss === null ? null : Math.round(loss),
       };
     });
   }, [prediction]);
@@ -173,7 +178,7 @@ export function ForecastProvider({ children }: { children: React.ReactNode }) {
     return prediction.ghi_forecast_curve.map((ghi, i) => ({
       t: forecastTimeLabel(base, i + 1),
       gen: Math.round((selectedStation.panel_area * selectedStation.efficiency * ghi) / 1000),
-      target: Math.round(prediction.target_power_kw),
+      target: Math.round(prediction.target_profile_kw?.[i] ?? prediction.target_power_kw),
     }));
   }, [prediction, selectedStation]);
 

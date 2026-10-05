@@ -4,7 +4,7 @@ import React from 'react';
 import { BookOpenIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
-import { ALERT_UI, CLOUD_UI, TONE_CLASS, CLOUD_HIGH_FROM_PCT, CLOUD_MEDIUM_FROM_PCT } from '@/lib/levels';
+import { ALERT_UI, CLOUD_UI, TONE_CLASS } from '@/lib/levels';
 
 type TermKey = 'help_ghi' | 'help_pgen' | 'help_ptarget' | 'help_dp' | 'help_reserve' | 'help_ghi_blend' | 'help_cloud' | 'help_lstm' | 'help_convlstm';
 
@@ -73,15 +73,13 @@ export default function HelpPage() {
           {(['low', 'medium', 'high'] as const).map((level) => {
             const ui = CLOUD_UI[level];
             const Icon = ui.icon;
-            const range =
-              level === 'low' ? `< ${CLOUD_MEDIUM_FROM_PCT}%` : level === 'medium' ? `${CLOUD_MEDIUM_FROM_PCT}–${CLOUD_HIGH_FROM_PCT}%` : `> ${CLOUD_HIGH_FROM_PCT}%`;
             const loss = level === 'low' ? t('help_loss_low') : level === 'medium' ? t('help_loss_medium') : t('help_loss_high');
             return (
               <li key={level} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${TONE_CLASS[ui.tone].box}`}>
                 <Icon className={`h-9 w-9 shrink-0 ${TONE_CLASS[ui.tone].icon}`} aria-hidden="true" />
                 <div>
                   <p className="text-[14px] font-bold text-ink">
-                    {t(ui.labelKey)} · {range}
+                    {t(ui.labelKey)}
                   </p>
                   <p className="text-[12.5px] text-slate-700">{loss}</p>
                 </div>

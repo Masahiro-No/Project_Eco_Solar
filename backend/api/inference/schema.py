@@ -26,7 +26,10 @@ class PredictionResultData(BaseModel):
     blend_weight: Optional[list[float]] = Field(None, description="Weight of the satellite branch per step (0 = LSTM only)")
     cloud_coverage_pct: Optional[list[Optional[float]]] = Field(None, description="Forecast cloud cover (%) in the AOI per step; null where no satellite forecast covers the step")
     cloud_coverage_now_pct: Optional[float] = Field(None, description="Cloud cover (%) in the AOI on the newest real satellite frame")
-    cloud_impact_level: Optional[str] = Field(None, description="low | medium | high; null when there is no satellite information")
+    sat_ghi_loss_pct: Optional[list[Optional[float]]] = Field(None, description="Expected loss of GHI (%) against clear sky per step, from the satellite branch")
+    sat_ghi_loss_now_pct: Optional[float] = Field(None, description="Expected loss of GHI (%) on the newest real satellite frame")
+    target_profile_kw: Optional[list[float]] = Field(None, description="Target per step: min(P_target, share of the clear-sky output at that time)")
+    cloud_impact_level: Optional[str] = Field(None, description="low | medium | high from the expected loss of GHI (10% / 30%); null when there is no satellite information")
     satellite_status: Optional[str] = Field(None, description="ok | shifted | missing | night | model_unavailable")
     satellite_lag_minutes: Optional[int] = Field(None, description="Age of the newest satellite frame relative to the forecast origin")
     is_night: Optional[bool] = None

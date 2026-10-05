@@ -7,7 +7,7 @@ import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
 import { useForecast } from '@/context/ForecastContext';
 import { solarApi } from '@/services/api';
-import { CLOUD_HIGH_FROM_PCT, CLOUD_MEDIUM_FROM_PCT, CLOUD_UI, TONE_CLASS, cloudLevelOf } from '@/lib/levels';
+import { CLOUD_UI, LOSS_HIGH_FROM_PCT, LOSS_MEDIUM_FROM_PCT, TONE_CLASS, impactLevelOfLoss } from '@/lib/levels';
 import { parseBackendDate } from '@/lib/time';
 
 // The model reads a 64x64 px crop; the area of interest is the 5x5 px box at its centre.
@@ -18,17 +18,18 @@ const AOI_OFFSET_PCT = ((CROP_PX - AOI_PX) / 2 / CROP_PX) * 100;
 
 const CLOCK = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' });
 
-type StatusKey = 'sat_ok' | 'sat_shifted' | 'sat_missing' | 'sat_night' | 'sat_low_sun' | 'sat_model_unavailable';
+type StatusKey = 'sat_ok' | 'sat_shifted' | 'sat_observed_only' | 'sat_missing' | 'sat_night' | 'sat_low_sun' | 'sat_model_unavailable';
 const STATUS_KEY: Record<string, StatusKey> = {
   ok: 'sat_ok',
   shifted: 'sat_shifted',
+  observed_only: 'sat_observed_only',
   missing: 'sat_missing',
   night: 'sat_night',
   low_sun: 'sat_low_sun',
   model_unavailable: 'sat_model_unavailable',
 };
 
-/** Cloud cover in the area around the station: now, and forecast by the ConvLSTM. */
+/** Cloud in the area around the station: cover and expected loss of irradiance, now and for the next steps. */
 export function CloudPanel() {
   const t = useTranslations('common');
   const { prediction, chartGhiData, selectedStationId } = useForecast();
@@ -56,7 +57,8 @@ export function CloudPanel() {
   const nowPct = prediction?.cloud_coverage_now_pct ?? null;
   const level = prediction?.cloud_impact_level ?? null;
   const ui = level ? CLOUD_UI[level] : null;
-  const usable = prediction?.satellite_status === 'ok' || prediction?.satellite_status === 'shifted';
+  const usable = ['ok', 'shifted', 'observed_only'].includes(prediction?.satellite_status ?? '');
+  const lossNow = prediction?.sat_ghi_loss_now_pct ?? null;
   const statusKey = prediction?.satellite_status ? STATUS_KEY[prediction.satellite_status] : undefined;
   const imageTime = image?.lastModified ? parseBackendDate(new Date(image.lastModified).toISOString()) : null;
 
@@ -82,7 +84,10 @@ export function CloudPanel() {
               <p className="text-[24px] font-bold leading-tight text-ink tabular-nums">
                 {usable && nowPct !== null ? `${Math.round(nowPct)}%` : '—'}
               </p>
-              <p className="text-[13px] font-semibold text-slate-700">{ui ? t(ui.labelKey) : t('cloud_unknown')}</p>
+              <p className="text-[13px] font-semibold text-slate-700">
+                {ui ? t(ui.labelKey) : t('cloud_unknown')}
+                {usable && lossNow !== null ? ` · ${t('sat_loss_now', { pct: Math.round(lossNow) })}` : ''}
+              </p>
             </div>
           </div>
 
@@ -95,16 +100,16 @@ export function CloudPanel() {
             <p className="mb-1 text-[11.5px] font-semibold text-slate-600">{t('cloud_forecast')}</p>
             <div className="flex h-12 items-end gap-[2px]" role="img" aria-label={t('cloud_forecast')}>
               {chartGhiData.map((p) => {
-                const lv = cloudLevelOf(p.cloudPct);
-                if (p.cloudPct === null || !lv) {
+                const lv = impactLevelOfLoss(p.lossPct);
+                if (p.lossPct === null || !lv) {
                   return <span key={p.t} title={`${p.t} · ${t('no_data')}`} className="h-[2px] min-w-0 flex-1 bg-slate-200" />;
                 }
                 return (
                   <span
                     key={p.t}
-                    title={`${p.t} · ${p.cloudPct}% · ${t(CLOUD_UI[lv].labelKey)}`}
+                    title={`${p.t} · ${t('cloud_cover')} ${p.cloudPct ?? '—'}% · ${t('loss_short')} ${p.lossPct}% · ${t(CLOUD_UI[lv].labelKey)}`}
                     className="min-w-0 max-w-[24px] flex-1 rounded-t-[4px] hover:opacity-70"
-                    style={{ height: `${Math.max(4, p.cloudPct)}%`, background: TONE_CLASS[CLOUD_UI[lv].tone].fill }}
+                    style={{ height: `${Math.max(6, Math.min(100, p.lossPct))}%`, background: TONE_CLASS[CLOUD_UI[lv].tone].fill }}
                   />
                 );
               })}
@@ -117,12 +122,12 @@ export function CloudPanel() {
               {(['low', 'medium', 'high'] as const).map((lv) => {
                 const Icon = CLOUD_UI[lv].icon;
                 const range =
-                  lv === 'low' ? `< ${CLOUD_MEDIUM_FROM_PCT}%` : lv === 'medium' ? `${CLOUD_MEDIUM_FROM_PCT}–${CLOUD_HIGH_FROM_PCT}%` : `> ${CLOUD_HIGH_FROM_PCT}%`;
+                  lv === 'low' ? `< ${LOSS_MEDIUM_FROM_PCT}%` : lv === 'medium' ? `${LOSS_MEDIUM_FROM_PCT}–${LOSS_HIGH_FROM_PCT}%` : `> ${LOSS_HIGH_FROM_PCT}%`;
                 return (
                   <li key={lv} className="flex items-center gap-1 whitespace-nowrap">
                     <span className="h-2.5 w-2.5 rounded-sm" style={{ background: TONE_CLASS[CLOUD_UI[lv].tone].fill }} />
                     <Icon className="h-3.5 w-3.5 text-slate-600" aria-hidden="true" />
-                    {t(CLOUD_UI[lv].labelKey)} {range}
+                    {t(CLOUD_UI[lv].labelKey)} ({t('loss_short')} {range})
                   </li>
                 );
               })}

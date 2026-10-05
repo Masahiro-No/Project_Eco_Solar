@@ -2,13 +2,18 @@
 
 P_gen is always computed from the blended GHI (LSTM + satellite), never from the raw LSTM curve:
 
-    P_gen(t) = A * eta * GHI_blend(t) / 1000   [kW]
-    dP_max   = max over the daylight steps of (P_target - P_gen(t))
+    P_gen(t)    = A * eta * GHI_blend(t) / 1000                      [kW]
+    target(t)   = min(P_target, f * A * eta * GHI_clearsky(t) / 1000)    f = TARGET_CLEARSKY_FRACTION
+    dP_max      = max over the daylight steps of (target(t) - P_gen(t))
 
-The alert level pairs "is the target met over the next 3 hours" with the cloud impact level in the
-next hour:
+The target follows the sun: a plant cannot deliver its full dispatch target at 8 a.m., so it is held to the
+smaller of the dispatch target and a share f of what clear sky would give at that time. A shortfall is then
+a loss caused by the weather, not by the hour of the day.
 
-                       cloud low   cloud medium            cloud high
+The alert level pairs "is the target met over the next 3 hours" with the impact level the satellite branch
+expects in the next hour (loss of irradiance: low < 10%, medium 10-30%, high > 30%):
+
+                       impact low  impact medium           impact high
     target met         normal      watch                   warning (prepare reserve)
     shortfall          warning     warning (+ buffer)      critical
 
@@ -17,6 +22,7 @@ Night is its own state and never an alert. The buffer is the forecast uncertaint
 A * eta * RMSE(lead) / 1000, with the model's test RMSE at that lead time.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence
 
@@ -24,6 +30,8 @@ from service.workers.cloud_coverage import max_impact_level
 from service.workers.solar_geometry import NIGHT_CLEARSKY_GHI
 
 CLOUD_LOOKAHEAD_MIN = 60
+# share of the clear-sky output a plant is expected to deliver (measured GHI at ST-002 reaches clear sky on its best quarter of slots)
+TARGET_CLEARSKY_FRACTION = float(os.environ.get("TARGET_CLEARSKY_FRACTION", "0.8"))
 
 LEVEL_TH = {"low": "ต่ำ", "medium": "กลาง", "high": "สูง"}
 
@@ -33,13 +41,14 @@ class Decision:
     alert_level: str                      # night | normal | watch | warning | critical
     recommendation_text: str
     estimated_power_kw: float             # P_gen at the first forecast step
-    delta_p_kw: float                     # dP_max, 0 when the target is met
+    delta_p_kw: float                     # dP_max against the target that follows the sun, 0 when it is met
     reserve_kw: float                     # dP_max + buffer (what to hold in reserve)
     buffer_kw: float
     cloud_impact_level: Optional[str]     # low | medium | high | None (no satellite information)
     is_night: bool
     shortfall_in_min: Optional[int]       # minutes until the first step below target
     power_forecast_kw: list[float] = field(default_factory=list)
+    target_profile_kw: list[float] = field(default_factory=list)   # target(t) per step
 
 
 def power_kw(panel_area_m2: float, efficiency: float, ghi_w_m2: float) -> float:
@@ -74,13 +83,19 @@ def evaluate(
     panel_area_m2: float,
     efficiency: float,
     target_power_kw: float,
-    cloud_fraction: Sequence[Optional[float]],
-    cloud_fraction_now: Optional[float] = None,
+    sat_loss: Sequence[Optional[float]],
+    sat_loss_now: Optional[float] = None,
     step_metrics: Optional[Mapping[str, float]] = None,
     step_minutes: int = 10,
+    clearsky_fraction: float = TARGET_CLEARSKY_FRACTION,
 ) -> Decision:
+    """sat_loss: expected loss of irradiance (1 - k) of the satellite branch per step, None where it has no value."""
     power = [round(power_kw(panel_area_m2, efficiency, g), 2) for g in ghi_blend]
     daylight = [i for i, cs in enumerate(clearsky) if cs >= NIGHT_CLEARSKY_GHI]
+    target = [
+        round(min(target_power_kw, clearsky_fraction * power_kw(panel_area_m2, efficiency, cs)), 2) if cs >= NIGHT_CLEARSKY_GHI else 0.0
+        for cs in clearsky
+    ]
 
     if not daylight:
         return Decision(
@@ -94,14 +109,16 @@ def evaluate(
             is_night=True,
             shortfall_in_min=None,
             power_forecast_kw=power,
+            target_profile_kw=target,
         )
 
     lookahead_steps = CLOUD_LOOKAHEAD_MIN // step_minutes
-    level = max_impact_level([cloud_fraction_now] + list(cloud_fraction[:lookahead_steps]))
-    known = [c for c in [cloud_fraction_now] + list(cloud_fraction[:lookahead_steps]) if c is not None]
-    cloud_pct = round(max(known) * 100) if known else None
+    near = [sat_loss_now] + list(sat_loss[:lookahead_steps])
+    level = max_impact_level(near)
+    known = [x for x in near if x is not None]
+    loss_pct = round(max(known) * 100) if known else None
 
-    gaps = {i: target_power_kw - power[i] for i in daylight}
+    gaps = {i: target[i] - power[i] for i in daylight}
     worst = max(gaps, key=gaps.get)
     delta_p = max(0.0, gaps[worst])
     shortfall = delta_p > 0.0
@@ -113,7 +130,7 @@ def evaluate(
     rmse = rmse_at_lead(step_metrics, buffer_lead)
     buffer_kw = power_kw(panel_area_m2, efficiency, rmse) if rmse is not None else 0.0
 
-    cloud_txt = f"เมฆในกรอบสถานีกระทบระดับ{LEVEL_TH[level]} (สูงสุด {cloud_pct}% ใน 1 ชั่วโมงข้างหน้า)" if level else "ไม่มีข้อมูลภาพดาวเทียม ใช้ผล LSTM อย่างเดียว"
+    cloud_txt = f"ภาพดาวเทียมชี้ว่าเมฆกระทบระดับ{LEVEL_TH[level]} (แสงลดสูงสุด {loss_pct}% ใน 1 ชั่วโมงข้างหน้า)" if level else "ไม่มีข้อมูลภาพดาวเทียม ใช้ผล LSTM อย่างเดียว"
 
     if not shortfall:
         if level == "high":
@@ -149,4 +166,5 @@ def evaluate(
         is_night=False,
         shortfall_in_min=shortfall_in_min,
         power_forecast_kw=power,
+        target_profile_kw=target,
     )

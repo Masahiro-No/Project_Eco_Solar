@@ -9,7 +9,7 @@ import { CloudPanel } from '@/components/UI/CloudPanel';
 import { ForecastFreshness } from '@/components/UI/ForecastFreshness';
 import { Panel } from '@/components/UI/Panel';
 import { useForecast } from '@/context/ForecastContext';
-import { CLOUD_UI, cloudLevelOf } from '@/lib/levels';
+import { CLOUD_UI, impactLevelOfLoss } from '@/lib/levels';
 
 export default function ForecastPage() {
   const t = useTranslations('common');
@@ -54,20 +54,22 @@ export default function ForecastPage() {
                   <th className="px-3 py-2">{t('ghi_blend')} (W/m²)</th>
                   <th className="px-3 py-2">{t('ghi_weight')}</th>
                   <th className="px-3 py-2">{t('cloud_cover')}</th>
+                  <th className="px-3 py-2">{t('sat_loss_col')}</th>
                   <th className="px-3 py-2">{t('kpi_pgen')} (kW)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line bg-white text-slate-700">
                 {chartGhiData.map((p, i) => {
-                  const lv = cloudLevelOf(p.cloudPct);
+                  const lv = impactLevelOfLoss(p.lossPct);
                   return (
                     <tr key={p.t}>
                       <td className="px-3 py-1.5 text-left font-medium text-ink">{p.t}</td>
                       <td className="px-3 py-1.5">{p.lstm ?? '—'}</td>
                       <td className="px-3 py-1.5 font-semibold text-ink">{p.blend}</td>
                       <td className="px-3 py-1.5">{p.weightPct === null ? '—' : `${p.weightPct}%`}</td>
+                      <td className="px-3 py-1.5">{p.cloudPct === null ? '—' : `${p.cloudPct}%`}</td>
                       <td className="px-3 py-1.5">
-                        {p.cloudPct === null || !lv ? '—' : `${p.cloudPct}% · ${t(CLOUD_UI[lv].labelKey)}`}
+                        {p.lossPct === null || !lv ? '—' : `${p.lossPct}% · ${t(CLOUD_UI[lv].labelKey)}`}
                       </td>
                       <td className="px-3 py-1.5">{chartPowerData[i] ? chartPowerData[i].gen.toLocaleString() : '—'}</td>
                     </tr>

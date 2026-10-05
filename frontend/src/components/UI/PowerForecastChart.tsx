@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { ZapIcon } from 'lucide-react';
-import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
@@ -37,10 +37,9 @@ export function PowerForecastChart() {
   const t = useTranslations('common');
   const { chartPowerData } = useForecast();
 
-  const target = chartPowerData[0]?.target ?? 0;
-  const top = Math.max(target, ...chartPowerData.map((p) => p.gen), 0);
+  const top = Math.max(...chartPowerData.map((p) => Math.max(p.gen, p.target)), 0);
   const yMax = Math.max(1000, Math.ceil((top * 1.1) / 1000) * 1000);
-  const labels = { gen: t('kpi_pgen'), target: t('kpi_ptarget'), short: t('dp_short'), met: t('dp_met') };
+  const labels = { gen: t('kpi_pgen'), target: t('target_now_legend'), short: t('dp_short'), met: t('dp_met') };
 
   return (
     <Panel
@@ -53,7 +52,7 @@ export function PowerForecastChart() {
             <span className="h-0.5 w-5" style={{ background: GEN }} /> {t('kpi_pgen')}
           </span>
           <span className="flex items-center gap-1.5 whitespace-nowrap">
-            <span className="w-5 border-t-2 border-dashed" style={{ borderColor: TARGET }} /> {t('kpi_ptarget')}
+            <span className="w-5 border-t-2 border-dashed" style={{ borderColor: TARGET }} /> {t('target_now_legend')}
           </span>
           <InfoTip text={t('help_pgen')} align="right" />
         </div>
@@ -77,7 +76,7 @@ export function PowerForecastChart() {
                   tickFormatter={(v: number) => v.toLocaleString()}
                 />
                 <Tooltip content={<PowerTooltip labels={labels} />} cursor={{ stroke: '#94a3b8', strokeWidth: 1 }} />
-                <ReferenceLine y={target} stroke={TARGET} strokeWidth={2} strokeDasharray="6 5" />
+                <Line dataKey="target" stroke={TARGET} strokeWidth={2} strokeDasharray="6 5" dot={false} activeDot={false} isAnimationActive={false} />
                 <Line dataKey="gen" stroke={GEN} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>

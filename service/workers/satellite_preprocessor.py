@@ -59,9 +59,10 @@ _TILE_CACHE_MAX = 36
 class SatelliteWindow:
     frames: Optional[np.ndarray]     # (1, 12, 1, 64, 64) in [0, 1], or None
     end_time: Optional[datetime]     # scan time of the last frame
-    status: str                      # ok | shifted | missing
+    status: str                      # ok | shifted | observed_only | missing
     shift_minutes: int = 0           # how far the window was moved back from the newest published frame
     reason: Optional[str] = None
+    last_frame: Optional[np.ndarray] = None   # (64, 64): the frame at end_time, also when there is no 12-frame window
 
 
 def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = FULL_DIM) -> Tuple[int, int]:
@@ -329,7 +330,7 @@ def load_satellite_window(
                     f"[Satellite Preprocessor] '{station_id}': 12 real frames ending {end:%H:%M} UTC"
                     f" (shift {shift} min, {int((newest_end - end).total_seconds() // 60)} min behind the forecast origin)"
                 )
-                return SatelliteWindow(seq, end, "shifted" if shift else "ok", shift)
+                return SatelliteWindow(seq, end, "shifted" if shift else "ok", shift, last_frame=frames[-1])
         if source.network_errors >= MAX_NETWORK_ERRORS and minio_client is None:
             break
         end -= FRAME_STEP
@@ -339,7 +340,14 @@ def load_satellite_window(
     elif newest_published is None:
         reason = f"no_frame_published_in_last_{MAX_FEED_AGE_MIN}_min"
     else:
+        # 12 consecutive frames are not available (every day after the 02:40 UTC scan gap), but the newest
+        # real frame is: the caller can still use what it shows
         reason = f"no_complete_window_within_{MAX_SHIFT_MIN}_min_shift"
+        newest = source.get(newest_published)
+        if newest is not None:
+            _cache_latest_rgb(station_id, lat, lon, newest_published, minio_client)
+            logger.info(f"[Satellite Preprocessor] '{station_id}': no 12-frame window, newest real frame {newest_published:%H:%M} UTC only")
+            return SatelliteWindow(None, newest_published, "observed_only", 0, reason, last_frame=newest)
     logger.warning(f"[Satellite Preprocessor] '{station_id}': no usable satellite window ({reason})")
     return SatelliteWindow(None, None, "missing", 0, reason)
 

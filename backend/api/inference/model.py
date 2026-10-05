@@ -33,7 +33,10 @@ class Prediction(Base):
     cloud_trend: Mapped[str] = mapped_column(String(50), nullable=False)  # impact level: low, medium, high, unknown
     cloud_coverage_pct: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)       # forecast per step, null = no satellite
     cloud_coverage_now_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # newest real frame
-    satellite_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ok, shifted, missing, night, model_unavailable
+    sat_ghi_loss_pct: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)          # expected loss of GHI per step from the satellite branch
+    sat_ghi_loss_now_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_profile_kw: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)         # target that follows the sun, per step
+    satellite_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ok, shifted, observed_only, missing, low_sun, night
     satellite_lag_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # legacy column, no longer written
 

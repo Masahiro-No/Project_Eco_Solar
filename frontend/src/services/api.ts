@@ -83,7 +83,7 @@ export interface NearestStationResponse {
 
 export type AlertLevel = 'night' | 'normal' | 'watch' | 'warning' | 'critical';
 export type CloudImpactLevel = 'low' | 'medium' | 'high';
-export type SatelliteStatus = 'ok' | 'shifted' | 'missing' | 'night' | 'low_sun' | 'model_unavailable';
+export type SatelliteStatus = 'ok' | 'shifted' | 'observed_only' | 'missing' | 'night' | 'low_sun' | 'model_unavailable';
 
 export interface PredictionResultData {
   job_id: string;
@@ -100,6 +100,11 @@ export interface PredictionResultData {
   /** Forecast cloud cover (%) in the area around the station; null where no satellite forecast covers the step */
   cloud_coverage_pct?: (number | null)[] | null;
   cloud_coverage_now_pct?: number | null;
+  /** Expected loss of GHI (%) against clear sky per step, from the satellite branch */
+  sat_ghi_loss_pct?: (number | null)[] | null;
+  sat_ghi_loss_now_pct?: number | null;
+  /** Target per step: the smaller of P_target and a share of the clear-sky output at that time */
+  target_profile_kw?: number[] | null;
   cloud_impact_level?: CloudImpactLevel | null;
   satellite_status?: SatelliteStatus | null;
   satellite_lag_minutes?: number | null;

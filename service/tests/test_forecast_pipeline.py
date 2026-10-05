@@ -10,14 +10,16 @@ import pytest
 
 from service.workers import decision
 from service.workers.cloud_coverage import (
-    IMPACT_HIGH_FROM,
-    IMPACT_MEDIUM_FROM,
+    SatelliteCalibration,
+    aoi_brightness,
     aoi_cloud_fraction,
+    ghi_loss,
+    held_observation_weight,
+    impact_level,
+    load_calibration,
+    max_impact_level,
     model_share,
     observed_then_forecast,
-    clear_sky_index_from_cloud,
-    impact_level,
-    max_impact_level,
 )
 from service.workers.ghi_blend import blend_ghi, satellite_weight
 from service.workers.solar_geometry import clearsky_ghi_at, solar_zenith_deg
@@ -64,14 +66,28 @@ def test_near_leads_use_the_observed_cloud_cover_and_later_leads_the_forecast():
     assert observed_then_forecast(0.6, None, 150, 30, 90) is None
 
 
-def test_impact_thresholds_come_from_kasten_czeplak():
-    # 10% and 30% loss of GHI
-    assert 1 - clear_sky_index_from_cloud(IMPACT_MEDIUM_FROM) == pytest.approx(0.10)
-    assert 1 - clear_sky_index_from_cloud(IMPACT_HIGH_FROM) == pytest.approx(0.30)
-    assert round(IMPACT_MEDIUM_FROM, 2) == 0.55 and round(IMPACT_HIGH_FROM, 2) == 0.76
-    assert [impact_level(c) for c in (0.0, 0.54, 0.56, 0.75, 0.77, 1.0)] == ["low", "low", "medium", "medium", "high", "high"]
+def test_brightness_gives_the_clear_sky_index_through_the_calibration():
+    cal = SatelliteCalibration(intercept=1.4, slope=3.2)
+    frames = np.full((2, 64, 64), 0.10, dtype=np.float32)
+    rho = aoi_brightness(frames, cos_zenith=[0.5, 0.2])
+    assert rho[0] == pytest.approx(0.2) and rho[1] is None             # low sun is not used
+    assert cal.clear_sky_index(0.2) == pytest.approx(1.4 - 0.64)
+    assert cal.clear_sky_index(0.0) == cal.k_max and cal.clear_sky_index(1.0) == cal.k_min   # kept in range
+
+
+def test_no_calibration_file_means_no_calibration(tmp_path):
+    assert load_calibration(tmp_path / "missing.json") is None
+    path = tmp_path / "calibration.json"
+    path.write_text('{"intercept": 1.39, "slope": 3.23, "pairs": 73}', encoding="utf-8")
+    cal = load_calibration(path)
+    assert (cal.intercept, cal.slope) == (1.39, 3.23)
+
+
+def test_impact_level_comes_from_the_expected_loss_of_irradiance():
+    assert ghi_loss(1.1) == 0.0 and ghi_loss(0.75) == pytest.approx(0.25) and ghi_loss(-0.2) == 1.0
+    assert [impact_level(x) for x in (0.0, 0.09, 0.10, 0.30, 0.31, 1.0)] == ["low", "low", "medium", "medium", "high", "high"]
     assert impact_level(None) is None
-    assert max_impact_level([None, 0.2, 0.8, None]) == "high" and max_impact_level([None, None]) is None
+    assert max_impact_level([None, 0.05, 0.4, None]) == "high" and max_impact_level([None, None]) is None
 
 
 # ----------------------------------------------------------------------------- blend
@@ -89,25 +105,33 @@ def test_blend_without_satellite_equals_lstm():
 
 def test_blend_with_full_weight_equals_satellite():
     cs = [800.0]
-    ghi, w = blend_ghi([100.0], cs, [1.0], [0.0], w0=1.0, tau_min=102)
-    assert w == [1.0] and ghi[0] == pytest.approx(cs[0] * 0.25)  # overcast: 1 - 0.75
+    ghi, w = blend_ghi([100.0], cs, [0.25], [0.0], w0=1.0, tau_min=102)
+    assert w == [1.0] and ghi[0] == pytest.approx(cs[0] * 0.25)  # satellite clear-sky index 0.25
 
 
 def test_blend_is_between_the_two_models_and_moves_to_lstm_later():
     cs = [800.0] * 18
     lstm = [700.0] * 18
-    cloud = [1.0] * 18
+    k_sat = [0.25] * 18
     lead = [10.0 * (i + 1) for i in range(18)]
-    ghi, w = blend_ghi(lstm, cs, cloud, lead, w0=0.9, tau_min=102)
+    ghi, w = blend_ghi(lstm, cs, k_sat, lead, w0=0.9, tau_min=102)
     assert all(200.0 <= g <= 700.0 for g in ghi)
     assert ghi == sorted(ghi) and w == sorted(w, reverse=True)
 
 
-def test_night_steps_are_zero_and_steps_without_cloud_forecast_keep_the_lstm():
-    ghi, w = blend_ghi([50.0, 40.0, 300.0], [0.0, 30.0, 600.0], [1.0, None, 0.0], [10.0, None, 30.0])
+def test_night_steps_are_zero_and_steps_without_a_satellite_value_keep_the_lstm():
+    ghi, w = blend_ghi([50.0, 40.0, 300.0], [0.0, 30.0, 600.0], [0.3, None, 0.9], [10.0, None, 30.0])
     assert ghi[0] == 0.0 and w[0] == 0.0          # night
     assert ghi[1] == 40.0 and w[1] == 0.0         # no usable frame for this step (e.g. sun too low)
     assert w[2] > 0.0
+
+
+def test_held_observation_fades_out_instead_of_stopping():
+    assert held_observation_weight(20) == 1.0 and held_observation_weight(30) == 1.0
+    assert held_observation_weight(50) == pytest.approx(0.5) and held_observation_weight(70) == 0.0
+    cs, lstm = [800.0] * 3, [400.0] * 3
+    ghi, w = blend_ghi(lstm, cs, [1.0] * 3, [30.0, 50.0, 70.0], w0=0.9, tau_min=102, weight_scale=[1.0, 0.5, 0.0])
+    assert w[0] > w[1] > w[2] == 0.0 and ghi[2] == 400.0 and ghi[0] > ghi[1] > ghi[2]
 
 
 # ----------------------------------------------------------------------------- solar geometry
@@ -120,33 +144,36 @@ def test_clearsky_is_zero_at_night_and_high_at_noon_in_hat_yai():
 
 
 # ----------------------------------------------------------------------------- decision
-def _decide(ghi, cloud, cloud_now=None, target=2000.0, cs=None):
+LOW, MEDIUM, HIGH = 0.05, 0.20, 0.50   # expected loss of irradiance from the satellite branch
+
+
+def _decide(ghi, loss, loss_now=None, target=2000.0, cs=None):
     cs = cs or [900.0] * len(ghi)
-    return decision.evaluate(ghi, cs, AREA, ETA, target, cloud, cloud_now, STEP_METRICS)
+    return decision.evaluate(ghi, cs, AREA, ETA, target, loss, loss_now, STEP_METRICS)
 
 
 def test_decision_matrix_target_met():
     ghi = [600.0] * 18  # 3240 kW >= 2000
-    assert _decide(ghi, [0.1] * 18).alert_level == "normal"
-    assert _decide(ghi, [0.6] * 18).alert_level == "watch"
-    d = _decide(ghi, [0.9] * 18)
+    assert _decide(ghi, [LOW] * 18).alert_level == "normal"
+    assert _decide(ghi, [MEDIUM] * 18).alert_level == "watch"
+    d = _decide(ghi, [HIGH] * 18)
     assert d.alert_level == "warning" and d.delta_p_kw == 0.0 and d.reserve_kw == d.buffer_kw > 0.0
 
 
 def test_decision_matrix_shortfall():
     ghi = [300.0] * 18  # 1620 kW < 2000 -> 380 kW short
-    low, mid, high = _decide(ghi, [0.1] * 18), _decide(ghi, [0.6] * 18), _decide(ghi, [0.9] * 18)
+    low, mid, high = _decide(ghi, [LOW] * 18), _decide(ghi, [MEDIUM] * 18), _decide(ghi, [HIGH] * 18)
     assert (low.alert_level, mid.alert_level, high.alert_level) == ("warning", "warning", "critical")
     assert low.delta_p_kw == pytest.approx(380.0) and low.reserve_kw == pytest.approx(380.0)
     assert mid.reserve_kw == pytest.approx(380.0 + mid.buffer_kw) and mid.buffer_kw > 0.0
     assert high.reserve_kw == mid.reserve_kw and low.shortfall_in_min == 10
 
 
-def test_decision_uses_only_the_next_hour_of_cloud_and_the_newest_real_frame():
+def test_decision_uses_only_the_next_hour_and_the_newest_real_frame():
     ghi = [600.0] * 18
-    late_cloud = [0.1] * 6 + [0.95] * 12          # heavy cloud only after 60 minutes
-    assert _decide(ghi, late_cloud).alert_level == "normal"
-    assert _decide(ghi, [0.1] * 18, cloud_now=0.95).alert_level == "warning"
+    late = [LOW] * 6 + [0.95] * 12                # heavy loss only after 60 minutes
+    assert _decide(ghi, late).alert_level == "normal"
+    assert _decide(ghi, [LOW] * 18, loss_now=0.95).alert_level == "warning"
 
 
 def test_decision_without_satellite_is_uncertain_not_clear():
@@ -162,11 +189,25 @@ def test_night_is_not_an_alert():
 
 
 def test_shortfall_only_counts_daylight_steps():
-    # sunset inside the horizon: the dark steps must not create a 5000 kW "shortfall"
+    # sunset inside the horizon: the dark steps must not create a "shortfall"
     cs = [400.0] * 6 + [0.0] * 12
-    ghi = [450.0] * 6 + [0.0] * 12        # 2430 kW in daylight, target 2000
-    d = _decide(ghi, [0.1] * 18, cs=cs)
+    ghi = [450.0] * 6 + [0.0] * 12        # 2430 kW in daylight
+    d = _decide(ghi, [LOW] * 18, cs=cs)
     assert not d.is_night and d.alert_level == "normal" and d.delta_p_kw == 0.0
+    assert d.target_profile_kw[-1] == 0.0
+
+
+def test_target_follows_the_sun():
+    # morning: clear sky gives 5.4 * 300 = 1620 kW, far below the 5000 kW dispatch target
+    cs = [300.0] * 18
+    clear = _decide([280.0] * 18, [0.03] * 18, target=5000.0, cs=cs)        # 1512 kW >= 0.8 * 1620
+    assert clear.alert_level == "normal" and clear.delta_p_kw == 0.0
+    assert clear.target_profile_kw[0] == pytest.approx(0.8 * 1620.0)
+    cloudy = _decide([150.0] * 18, [HIGH] * 18, target=5000.0, cs=cs)       # 810 kW < 1296
+    assert cloudy.alert_level == "critical" and cloudy.delta_p_kw == pytest.approx(1296.0 - 810.0)
+    # around noon the dispatch target is the limit again
+    noon = _decide([900.0] * 18, [0.03] * 18, target=3000.0, cs=[1000.0] * 18)
+    assert noon.target_profile_kw[0] == 3000.0
 
 
 def test_rmse_interpolation():

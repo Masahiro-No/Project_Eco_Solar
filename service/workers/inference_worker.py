@@ -32,7 +32,16 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from service.workers import decision
-from service.workers.cloud_coverage import MIN_COS_ZENITH, aoi_cloud_fraction, observed_then_forecast
+from service.workers.cloud_coverage import (
+    MIN_COS_ZENITH,
+    OBSERVED_HOLD_MAX_MIN,
+    aoi_brightness,
+    aoi_cloud_fraction,
+    ghi_loss,
+    held_observation_weight,
+    load_calibration,
+    observed_then_forecast,
+)
 from service.workers.ghi_blend import BLEND_TAU_MIN, BLEND_W0, blend_ghi
 from service.workers.satellite_preprocessor import load_satellite_window
 from service.workers.solar_geometry import NIGHT_CLEARSKY_GHI, clearsky_ghi_at, cos_zenith_at
@@ -330,22 +339,30 @@ def _forecast_origin(data_time: Any) -> datetime:
 def _no_satellite(n_steps: int, reason: str) -> dict[str, Any]:
     return {
         "status": "missing", "reason": reason, "end_time": None, "lag_minutes": None, "shift_minutes": 0,
-        "cloud_now": None, "cloud": [None] * n_steps, "lead_min": [None] * n_steps,
+        "cloud_now": None, "cloud": [None] * n_steps, "k_now": None, "k": [None] * n_steps, "lead_min": [None] * n_steps,
+        "weight_scale": [1.0] * n_steps,
     }
 
 
 def _satellite_branch(
     station_id: str, lat: float, lon: float, origin: datetime, n_steps: int, logger: logging.Logger
 ) -> dict[str, Any]:
-    """Cloud fraction per forecast step from real frames + ConvLSTM, aligned to the forecast origin.
+    """Satellite values per forecast step, aligned to the forecast origin.
 
-    The newest satellite frame is usually 20-30 minutes older than the weather data, so ConvLSTM
-    frame j (sat_end + (j + 1) * 10 min) maps to forecast step i = j - lag_steps. Steps without a
-    predicted frame keep None and get a satellite weight of 0.
+    Per step: the cloud fraction in the AOI (for display) and the clear-sky index k from the AOI brightness
+    (for the blend). The newest satellite frame is usually 20-30 minutes older than the weather data, so
+    ConvLSTM frame j (sat_end + (j + 1) * 10 min) maps to forecast step i = j - lag_steps. Near lead times
+    use what the newest real frame shows, later ones the ConvLSTM forecast. Without a complete 12-frame
+    window the value of the newest real frame is held for at most OBSERVED_HOLD_MAX_MIN. Steps without a
+    value keep None and get a satellite weight of 0.
     """
     window = load_satellite_window(station_id, lat, lon, origin)
     out = _no_satellite(n_steps, window.reason)
-    if window.frames is None:
+    if window.last_frame is None:
+        return out
+    calibration = load_calibration()
+    if calibration is None:
+        out["reason"] = "satellite_calibration_missing"
         return out
 
     out["end_time"] = window.end_time
@@ -358,32 +375,44 @@ def _satellite_branch(
         out["reason"] = "sun_too_low_at_last_frame"
         return out
 
-    session = _load_trained_convlstm_onnx()
-    if session is None:
-        out["status"], out["reason"] = "model_unavailable", "convlstm_model_not_loaded"
-        return out
+    rho_now = aoi_brightness(window.last_frame, [cos_end])[0]
+    out["cloud_now"] = aoi_cloud_fraction(window.last_frame, cos_zenith=[cos_end])[0]
+    out["k_now"] = calibration.clear_sky_index(rho_now)
 
-    predicted = session.run(None, {session.get_inputs()[0].name: window.frames})[0]
-    frame_times = [window.end_time + timedelta(minutes=STEP_MINUTES * (j + 1)) for j in range(predicted.shape[1])]
-    fractions = aoi_cloud_fraction(predicted, cos_zenith=[cos_zenith_at(lat, lon, t) for t in frame_times])
-    out["cloud_now"] = aoi_cloud_fraction(window.frames[0, -1, 0], cos_zenith=[cos_end])[0]
+    rho_pred: list = []
+    frac_pred: list = []
+    session = _load_trained_convlstm_onnx() if window.frames is not None else None
+    if session is not None:
+        predicted = session.run(None, {session.get_inputs()[0].name: window.frames})[0]
+        cos_pred = [cos_zenith_at(lat, lon, window.end_time + timedelta(minutes=STEP_MINUTES * (j + 1))) for j in range(predicted.shape[1])]
+        rho_pred = aoi_brightness(predicted, cos_pred)
+        frac_pred = aoi_cloud_fraction(predicted, cos_zenith=cos_pred)
 
-    # near lead times keep the cloud cover seen in the newest real frame, later ones use the ConvLSTM forecast
     lag_steps = out["lag_minutes"] // STEP_MINUTES
     for i in range(n_steps):
         j = i + lag_steps
-        if 0 <= j < len(fractions):
-            lead = float((j + 1) * STEP_MINUTES)
-            cover = observed_then_forecast(out["cloud_now"], fractions[j], lead)
-            if cover is not None:
-                out["cloud"][i] = cover
-                out["lead_min"][i] = lead
-    out["status"] = window.status
-    known = [c for c in out["cloud"] if c is not None]
-    span = f"{min(known) * 100:.0f}-{max(known) * 100:.0f}% on {len(known)} steps" if known else "no usable step"
+        lead = float((j + 1) * STEP_MINUTES)   # minutes after the newest real frame
+        if 0 <= j < len(rho_pred):
+            rho = observed_then_forecast(rho_now, rho_pred[j], lead)
+            cover = observed_then_forecast(out["cloud_now"], frac_pred[j], lead)
+        elif not rho_pred and lead <= OBSERVED_HOLD_MAX_MIN:
+            rho, cover = rho_now, out["cloud_now"]   # no ConvLSTM forecast: hold the real observation
+            out["weight_scale"][i] = held_observation_weight(lead, STEP_MINUTES)
+        else:
+            rho = cover = None
+        if rho is not None:
+            out["k"][i] = calibration.clear_sky_index(rho)
+            out["cloud"][i] = cover
+            out["lead_min"][i] = lead
+
+    out["status"] = window.status if rho_pred else "observed_only"
+    if not rho_pred and window.frames is not None:
+        out["reason"] = "convlstm_model_not_loaded"
+    known = [k for k in out["k"] if k is not None]
+    span = f"k {min(known):.2f}-{max(known):.2f} on {len(known)} steps" if known else "no usable step"
     logger.info(
-        f"[Satellite] frames end {window.end_time:%H:%M} UTC, lag {out['lag_minutes']} min, "
-        f"shift {window.shift_minutes} min; cloud now {out['cloud_now'] * 100:.0f}%, forecast {span}"
+        f"[Satellite] {out['status']}: newest frame {window.end_time:%H:%M} UTC, lag {out['lag_minutes']} min, "
+        f"shift {window.shift_minutes} min; now cloud {out['cloud_now'] * 100:.0f}% k {out['k_now']:.2f}; forecast {span}"
     )
     return out
 
@@ -452,16 +481,18 @@ async def run_inference(
             sat = _no_satellite(n_steps, f"error: {e}")
 
         # ── 3. Blend and decide ──────────────────────────────────────────
-        ghi_blend, weights = blend_ghi(ghi_lstm, clearsky, sat["cloud"], sat["lead_min"])
+        ghi_blend, weights = blend_ghi(ghi_lstm, clearsky, sat["k"], sat["lead_min"], weight_scale=sat["weight_scale"])
+        sat_loss = [None if k is None else ghi_loss(k) for k in sat["k"]]
+        sat_loss_now = None if sat["k_now"] is None else ghi_loss(sat["k_now"])
         ghi_blend = [round(v, 2) for v in ghi_blend]
         # the night rule applies to the raw LSTM curve as well, so both lines agree after sunset
         ghi_lstm = [0.0 if cs < NIGHT_CLEARSKY_GHI else v for v, cs in zip(ghi_lstm, clearsky)]
         d = decision.evaluate(
             ghi_blend, clearsky, panel_area, efficiency, target_power_kw,
-            cloud_fraction=sat["cloud"], cloud_fraction_now=sat["cloud_now"],
+            sat_loss=sat_loss, sat_loss_now=sat_loss_now,
             step_metrics=meta.get("step_metrics"), step_minutes=STEP_MINUTES,
         )
-        if d.is_night and sat["status"] in ("ok", "shifted"):
+        if d.is_night and sat["status"] in ("ok", "shifted", "observed_only"):
             sat["status"] = "night"
         logger.info(
             f"[Blend] w0={BLEND_W0} tau={BLEND_TAU_MIN} min; satellite {sat['status']}; "
@@ -482,6 +513,8 @@ async def run_inference(
             "blend_weight": [round(w, 3) for w in weights],
             "cloud_coverage_pct": [_pct(c) for c in sat["cloud"]],
             "cloud_coverage_now_pct": _pct(sat["cloud_now"]),
+            "sat_ghi_loss_pct": [_pct(x) for x in sat_loss],
+            "sat_ghi_loss_now_pct": _pct(sat_loss_now),
             "cloud_impact_level": d.cloud_impact_level,
             "satellite_status": sat["status"],
             "satellite_reason": sat["reason"],
@@ -491,6 +524,7 @@ async def run_inference(
             "estimated_power_kw": d.estimated_power_kw,
             "power_forecast_kw": d.power_forecast_kw,
             "target_power_kw": target_power_kw,
+            "target_profile_kw": d.target_profile_kw,
             "delta_p_kw": d.delta_p_kw,
             "reserve_kw": d.reserve_kw,
             "alert_level": d.alert_level,
@@ -498,7 +532,7 @@ async def run_inference(
             # provenance: every value above comes from the deployed models and real inputs
             "lstm_source": "onnx",
             "input_source": "weather_features",
-            "cloud_source": "convlstm" if sat["status"] in ("ok", "shifted") else "none",
+            "cloud_source": {"ok": "convlstm", "shifted": "convlstm", "observed_only": "observed"}.get(sat["status"], "none"),
         }
 
         try:

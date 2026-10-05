@@ -306,6 +306,10 @@ services:
       # satellite cloud cover per lead time: observed value up to the first, ConvLSTM forecast from the second (minutes)
       CLOUD_OBSERVED_UNTIL_MIN: "30"
       CLOUD_MODEL_FROM_MIN: "90"
+      # no complete 12-frame window (daily scan gap): hold the newest real frame at most this long (minutes)
+      CLOUD_OBSERVED_HOLD_MAX_MIN: "60"
+      # target at a time of day = min(P_target, this share of the clear-sky output)
+      TARGET_CLEARSKY_FRACTION: "0.8"
       # --- missing satellite frames: shift the 12-frame window back at most this far ---
       SATELLITE_MAX_SHIFT_MIN: "30"
     depends_on:
