@@ -37,6 +37,8 @@ FULL_DIM = 1100  # level-2d full disk; one pixel is ~15 km (E-W) x ~11 km (N-S) 
 SEQ_LEN = 12
 FRAME_STEP = timedelta(minutes=10)
 CACHE_BUCKET = "satellite-cache"
+FORECAST_BUCKET = "satellite-forecast"  # frames predicted by the ConvLSTM in the newest round (for the web page)
+CROP_SIZE = 64
 
 # NICT publishes a frame roughly 20-30 minutes after the scan, so the newest frame is always a bit behind
 MAX_FEED_AGE_MIN = int(os.environ.get("SATELLITE_MAX_FEED_AGE_MIN", "60"))
@@ -286,6 +288,61 @@ class _FrameSource:
             )
         except Exception as e:
             logger.warning(f"[Satellite Preprocessor] Could not cache frame {ts:%H:%M} of '{self.station_id}': {e}")
+
+
+def save_forecast_frames(
+    station_id: str,
+    end_time: Optional[datetime],
+    predicted: Optional[np.ndarray],
+    cloud_fractions: Optional[list],
+    status: str,
+    reason: Optional[str] = None,
+) -> int:
+    """Keep the frames the ConvLSTM predicted in this round, so the web page can play them after the real ones.
+
+    One set per station, overwritten every round: <station>/step_01.png ... and <station>/meta.json (written
+    last). A round without a ConvLSTM forecast writes meta.json with 0 steps, so the page never shows the
+    frames of an older round as current. Returns the number of frames stored; a storage problem never fails
+    the forecast.
+    """
+    import json
+
+    try:
+        client = connect_minio(read_timeout=3.0)
+        if client is None:
+            return 0
+        if not client.bucket_exists(FORECAST_BUCKET):
+            client.make_bucket(FORECAST_BUCKET)
+
+        frames = [] if predicted is None else list(np.asarray(predicted, dtype=np.float32).reshape(-1, CROP_SIZE, CROP_SIZE))
+        for j, frame in enumerate(frames):
+            buf = io.BytesIO()
+            Image.fromarray((np.clip(frame, 0.0, 1.0) * 255.0).astype(np.uint8)).save(buf, format="PNG")
+            buf.seek(0)
+            client.put_object(
+                FORECAST_BUCKET, f"{station_id}/step_{j + 1:02d}.png", buf,
+                length=buf.getbuffer().nbytes, content_type="image/png",
+            )
+        fractions = list(cloud_fractions or [])
+        meta = {
+            "station_id": station_id,
+            "end_time": end_time.isoformat() if end_time else None,   # newest real frame the forecast starts from
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "reason": reason,
+            "steps": len(frames),
+            "step_minutes": int(FRAME_STEP.total_seconds() // 60),
+            "cloud_pct": [
+                None if j >= len(fractions) or fractions[j] is None else round(float(fractions[j]) * 100.0, 1)
+                for j in range(len(frames))
+            ],
+        }
+        body = json.dumps(meta).encode("utf-8")
+        client.put_object(FORECAST_BUCKET, f"{station_id}/meta.json", io.BytesIO(body), length=len(body), content_type="application/json")
+        return len(frames)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[Satellite Preprocessor] Could not store the forecast frames of '{station_id}': {e}")
+        return 0
 
 
 def floor_10min(dt: datetime) -> datetime:

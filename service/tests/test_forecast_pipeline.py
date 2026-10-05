@@ -231,3 +231,64 @@ def test_rmse_interpolation():
     assert decision.rmse_at_lead(STEP_METRICS, 20) == pytest.approx((53.6 + 70.38) / 2)
     assert decision.rmse_at_lead(STEP_METRICS, 500) == 96.2
     assert decision.rmse_at_lead(None, 60) is None and decision.rmse_at_lead({}, 60) is None
+
+
+# ----------------------------------------------------------------------------- frames kept for the cloud player
+class _FakeMinio:
+    def __init__(self):
+        self.objects = {}
+
+    def bucket_exists(self, bucket):
+        return True
+
+    def put_object(self, bucket, name, data, length, content_type=None):
+        self.objects[(bucket, name)] = data.read()
+
+
+def test_forecast_frames_are_stored_with_their_meta_and_an_empty_round_says_so(monkeypatch):
+    import io as _io
+    import json
+
+    from PIL import Image
+
+    from service.workers import satellite_preprocessor as sp
+
+    fake = _FakeMinio()
+    monkeypatch.setattr(sp, "connect_minio", lambda read_timeout=1.5: fake)
+    end = datetime(2026, 10, 5, 6, 0, tzinfo=timezone.utc)
+    predicted = np.linspace(0.0, 1.0, 18 * 64 * 64, dtype=np.float32).reshape(1, 18, 1, 64, 64)   # the model's output shape
+
+    stored = sp.save_forecast_frames("ST-X", end, predicted, [0.5] * 17 + [None], "ok")
+    assert stored == 18
+    names = sorted(n for b, n in fake.objects if b == sp.FORECAST_BUCKET)
+    assert names[0] == "ST-X/meta.json" and names[1] == "ST-X/step_01.png" and names[-1] == "ST-X/step_18.png"
+    meta = json.loads(fake.objects[(sp.FORECAST_BUCKET, "ST-X/meta.json")])
+    assert meta["steps"] == 18 and meta["end_time"] == end.isoformat() and meta["status"] == "ok"
+    assert meta["cloud_pct"][0] == 50.0 and meta["cloud_pct"][-1] is None      # low sun: no cloud cover for that frame
+    first = np.asarray(Image.open(_io.BytesIO(fake.objects[(sp.FORECAST_BUCKET, "ST-X/step_01.png")])))
+    assert first.shape == (64, 64) and first.dtype == np.uint8                 # the frame itself, 8-bit grey
+
+    # a round without a ConvLSTM forecast: no frame is written, the meta says 0 steps (nothing old is shown as current)
+    assert sp.save_forecast_frames("ST-X", end, None, None, "observed_only", "incomplete_window") == 0
+    meta = json.loads(fake.objects[(sp.FORECAST_BUCKET, "ST-X/meta.json")])
+    assert meta["steps"] == 0 and meta["status"] == "observed_only" and meta["cloud_pct"] == []
+
+    # storage down: the forecast itself must not fail
+    monkeypatch.setattr(sp, "connect_minio", lambda read_timeout=1.5: None)
+    assert sp.save_forecast_frames("ST-X", end, predicted, None, "ok") == 0
+
+
+def test_calibration_check_reports_the_error_of_the_current_line_per_station():
+    from service.training import calibrate_satellite_ghi as cal
+
+    t0 = datetime(2026, 10, 5, 3, 0, tzinfo=timezone.utc)
+    current = {"intercept": 1.0, "slope": 2.0, "k_min": 0.05, "k_max": 1.15, "stations": ["ST-A"]}
+    on_line = [{"station_id": "ST-A", "time": t0, "rho": 0.1 + 0.005 * i, "k": 1.0 - 2.0 * (0.1 + 0.005 * i)} for i in range(40)]
+    off_line = [{"station_id": "ST-B", "time": t0, "rho": 0.2, "k": 0.5} for _ in range(35)]      # the line gives 0.6
+    too_few = [{"station_id": "ST-C", "time": t0, "rho": 0.2, "k": 0.6} for _ in range(5)]
+
+    checked = cal.check(on_line + off_line + too_few, current)
+    assert set(checked) == {"ST-A", "ST-B"}                                    # ST-C has too few measured slots to say anything
+    assert checked["ST-A"]["fitted"] is True and checked["ST-A"]["mae"] == 0.0 and checked["ST-A"]["pairs"] == 40
+    assert checked["ST-B"]["fitted"] is False and checked["ST-B"]["mae"] == pytest.approx(0.1) and checked["ST-B"]["pairs"] == 35
+

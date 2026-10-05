@@ -1,11 +1,15 @@
 import asyncio
+from datetime import date as date_type
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
 from api.auth.service import get_current_user, require_admin
+from api.ingestion.forecast_frames import read_forecast_frames
 from api.ingestion.schema import (
+    DayFramesResponse,
     IngestTriggerRequest,
     IngestTriggerResponse,
     IngestionStatusResponse,
@@ -13,8 +17,11 @@ from api.ingestion.schema import (
     WeatherRecentItem,
 )
 from api.ingestion.service import IngestionService
+from api.stations.service import StationService
 from api.storage.service import StorageService
 from db.database import get_db_session
+
+TH_TZ = timezone(timedelta(hours=7))
 
 
 async def trigger_ingestion(
@@ -92,3 +99,39 @@ async def get_latest_satellite_crop(
     if last_modified:
         headers["Last-Modified"] = last_modified
     return Response(content=data, media_type="image/png", headers=headers)
+
+
+async def get_day_satellite_frames(
+    station_id: str,
+    date: date_type = Query(..., description="Day in Thai time, YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db_session),
+    _: User = Depends(get_current_user),
+) -> DayFramesResponse:
+    """Real Band 03 frames of one station and day, and for today the frames the ConvLSTM predicted in the newest round."""
+    from api.frame_review import service as frames
+
+    station = await StationService.get_station_by_id(db, station_id)
+    if station is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Station '{station_id}' not found")
+    try:
+        items, night = await asyncio.to_thread(frames.read_day_frames, station_id, station.latitude, station.longitude, date)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Could not read the frame cache: {e}") from None
+
+    real = [it for it in items if "blank" not in it["flags"]]
+    forecast = None
+    if date == datetime.now(TH_TZ).date():
+        try:
+            forecast = await asyncio.to_thread(read_forecast_frames, station_id)
+        except Exception:  # noqa: BLE001  the real frames are still worth showing
+            forecast = None
+        if forecast is not None:
+            forecast["model_version"] = frames.deployed_convlstm()["model_version"]
+    return DayFramesResponse(
+        station_id=station_id,
+        date=date.isoformat(),
+        frames=[{"timestamp": it["timestamp"], "cloud_pct": it["cloud_pct"], "image_b64": it["image_b64"]} for it in real],
+        night_frames=night,
+        blank_frames=len(items) - len(real),
+        forecast=forecast,
+    )

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Response, status
 
 from api.ingestion.controller import (
+    get_day_satellite_frames,
     get_ingestion_status,
     get_latest_satellite_crop,
     get_recent_satellite_frames,
@@ -9,6 +10,7 @@ from api.ingestion.controller import (
     trigger_ingestion,
 )
 from api.ingestion.schema import (
+    DayFramesResponse,
     IngestTriggerResponse,
     IngestionStatusResponse,
     SatelliteFrameItem,
@@ -69,4 +71,13 @@ router.add_api_route(
     status_code=status.HTTP_200_OK,
     summary="Newest real satellite crop around a station (PNG)",
     response_class=Response,
+)
+
+router.add_api_route(
+    "/satellite/{station_id}/day-frames",
+    get_day_satellite_frames,
+    methods=["GET"],
+    response_model=DayFramesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Real satellite frames of a day and the newest ConvLSTM forecast frames",
 )

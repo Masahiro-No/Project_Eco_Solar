@@ -43,7 +43,7 @@ from service.workers.cloud_coverage import (
     observed_then_forecast,
 )
 from service.workers.ghi_blend import BLEND_TAU_MIN, BLEND_W0, blend_ghi
-from service.workers.satellite_preprocessor import load_satellite_window
+from service.workers.satellite_preprocessor import load_satellite_window, save_forecast_frames
 from service.workers.solar_geometry import NIGHT_CLEARSKY_GHI, clearsky_ghi_at, cos_zenith_at
 
 STEP_MINUTES = 10
@@ -387,6 +387,7 @@ def _satellite_branch(
         cos_pred = [cos_zenith_at(lat, lon, window.end_time + timedelta(minutes=STEP_MINUTES * (j + 1))) for j in range(predicted.shape[1])]
         rho_pred = aoi_brightness(predicted, cos_pred)
         frac_pred = aoi_cloud_fraction(predicted, cos_zenith=cos_pred)
+        out["predicted_frames"], out["predicted_cloud"] = predicted, frac_pred   # stored for the cloud player
 
     lag_steps = out["lag_minutes"] // STEP_MINUTES
     for i in range(n_steps):
@@ -479,6 +480,12 @@ async def run_inference(
         except Exception as e:  # the LSTM forecast is still real: continue without the satellite
             logger.warning(f"[Satellite] branch failed ({e}); using the LSTM alone")
             sat = _no_satellite(n_steps, f"error: {e}")
+        # the frames the ConvLSTM predicted in this round (none when it did not run), shown on the forecast page
+        stored = save_forecast_frames(
+            station_id, sat["end_time"], sat.pop("predicted_frames", None), sat.pop("predicted_cloud", None),
+            sat["status"], sat["reason"],
+        )
+        logger.info(f"[Satellite] stored {stored} forecast frames for the cloud player")
 
         # ── 3. Blend and decide ──────────────────────────────────────────
         ghi_blend, weights = blend_ghi(ghi_lstm, clearsky, sat["k"], sat["lead_min"], weight_scale=sat["weight_scale"])
