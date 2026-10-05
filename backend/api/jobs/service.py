@@ -32,7 +32,7 @@ class JobService:
 
     @staticmethod
     async def get_all_queues_summary() -> list[dict]:
-        """List summary of queues and key metrics from Redis."""
+        """Number of jobs waiting in each queue, counted in Redis."""
         pool = await JobService.get_pool()
         known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue"]
         summaries = []
@@ -44,8 +44,6 @@ class JobService:
             summaries.append({
                 "queue_name": q_name,
                 "pending": pending or 0,
-                "active": 0,  # Worker updates in real-time
-                "failed": 0,
                 "total_keys": pending or 0,
             })
 

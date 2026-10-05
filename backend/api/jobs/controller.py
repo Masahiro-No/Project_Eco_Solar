@@ -24,7 +24,7 @@ async def get_job_status(
 async def get_all_queues_summary(
     _: User = Depends(require_admin),
 ) -> list[QueueSummaryResponse]:
-    """สรุปภาพรวมของทุกคิวใน Redis (จำนวนงานที่รอ, กำลังรัน, พัง)"""
+    """สรุปจำนวนงานที่รอในแต่ละคิวของ Redis"""
     summaries = await JobService.get_all_queues_summary()
     return [QueueSummaryResponse(**s) for s in summaries]
 

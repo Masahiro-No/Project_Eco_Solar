@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
-from api.ingestion.normalizer import WeatherDataNormalizer
+from api.ingestion.normalizer import MissingWeatherValue, OPEN_METEO_VARIABLES, WeatherDataNormalizer
 from api.ingestion.schema import IngestTriggerResponse, IngestionStatusResponse, SatelliteFrameItem, WeatherRecentItem
 from api.ingestion.solar_calculator import SolarCalculator
 from api.stations.model import Station
@@ -70,7 +70,7 @@ class IngestionService:
         url = (
             f"https://api.open-meteo.com/v1/forecast?"
             f"latitude={lat}&longitude={lon}&timezone=UTC"
-            f"&current=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,cloud_cover,direct_normal_irradiance,shortwave_radiation"
+            f"&current={','.join(OPEN_METEO_VARIABLES)}"
             f"&{OPEN_METEO_WIND_UNIT}"
         )
         req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
@@ -352,10 +352,10 @@ class IngestionService:
         """Detect gap since latest recorded weather and automatically backfill missing 10-minute intervals.
 
         Interpolates Open-Meteo data to exact 10-minute intervals and computes
-        astronomical solar metrics. Runs on startup and on-demand.
+        astronomical solar metrics. Runs on startup and on-demand. A slot Open-Meteo gave no complete values
+        for is not stored (counted in `records_skipped`); the gap rules of the forecast then apply to it.
         """
         import math
-        import pandas as pd
 
         try:
             station = await StationService.get_station_by_id(db, station_id)
@@ -400,7 +400,7 @@ class IngestionService:
         url = (
             f"https://api.open-meteo.com/v1/forecast?"
             f"latitude={lat}&longitude={lon}&past_days={past_days}"
-            f"&minutely_15=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,cloud_cover,direct_normal_irradiance,shortwave_radiation"
+            f"&minutely_15={','.join(OPEN_METEO_VARIABLES)}"
             f"&timezone=UTC&{OPEN_METEO_WIND_UNIT}"
         )
 
@@ -423,15 +423,16 @@ class IngestionService:
                 "station_id": station_id,
             }
 
-        df = pd.DataFrame(minutely)
-        df["time"] = pd.to_datetime(df["time"], utc=True)
-        df.set_index("time", inplace=True)
-
-        # Resample to 10-minute cadence
-        df_10m = df.resample("10min").interpolate(method="time").ffill().bfill()
+        try:
+            df_10m = WeatherDataNormalizer.open_meteo_ten_minute_rows(minutely)
+        except MissingWeatherValue as e:
+            return {"status": "failed", "message": str(e), "station_id": station_id}
 
         # Filter for timestamps strictly greater than latest_ts and <= now_utc
-        df_missing = df_10m[(df_10m.index > latest_ts) & (df_10m.index <= now_utc)].copy()
+        df_missing = df_10m[(df_10m.index > latest_ts) & (df_10m.index <= now_utc)]
+        first_slot = latest_ts.replace(minute=(latest_ts.minute // 10) * 10, second=0, microsecond=0) + timedelta(minutes=10)
+        slots_in_gap = int((now_utc - first_slot).total_seconds() // 600) + 1 if now_utc >= first_slot else 0
+        skipped = max(0, slots_in_gap - len(df_missing))
 
         if df_missing.empty:
             return {
@@ -439,12 +440,13 @@ class IngestionService:
                 "message": "No new 10-minute records needed after resampling.",
                 "station_id": station_id,
                 "records_inserted": 0,
+                "records_skipped": skipped,
             }
 
         records = []
         for row_time, row in df_missing.iterrows():
             dt = row_time.to_pydatetime()
-            raw_ghi = max(0.0, float(row.get("shortwave_radiation", 0.0) or 0.0))
+            raw_ghi = max(0.0, float(row["shortwave_radiation"]))
             solar = SolarCalculator.get_solar_metrics(lat=lat, lon=lon, dt_utc=dt, measured_ghi=raw_ghi)
 
             if not solar.is_daylight or solar.zenith_degrees >= 90.0:
@@ -453,7 +455,7 @@ class IngestionService:
                 dhi = 0.0
             else:
                 ghi = raw_ghi
-                dni = max(0.0, float(row.get("direct_normal_irradiance", 0.0) or 0.0))
+                dni = max(0.0, float(row["direct_normal_irradiance"]))
                 cos_z = max(0.01, math.cos(math.radians(solar.zenith_degrees)))
                 dhi = max(0.0, ghi - dni * cos_z)
 
@@ -466,11 +468,11 @@ class IngestionService:
                 clearsky_ghi=round(solar.clearsky_ghi, 2),
                 clearsky_index=round(solar.clearsky_index, 4),
                 solar_zenith_angle=round(solar.zenith_degrees, 2),
-                temperature=round(float(row.get("temperature_2m", 25.0)), 2),
-                relative_humidity=round(float(row.get("relative_humidity_2m", 50.0)), 2),
-                wind_speed=round(float(row.get("wind_speed_10m", 0.0) or 0.0), 2),
-                cloud_cover=round(float(row.get("cloud_cover", 0.0) or 0.0), 2),
-                surface_pressure=round(float(row.get("surface_pressure", 1013.25) or 1013.25), 2),
+                temperature=round(float(row["temperature_2m"]), 2),
+                relative_humidity=round(float(row["relative_humidity_2m"]), 2),
+                wind_speed=round(float(row["wind_speed_10m"]), 2),
+                cloud_cover=round(float(row["cloud_cover"]), 2),
+                surface_pressure=round(float(row["surface_pressure"]), 2),
                 source="open_meteo_catchup",
             )
             records.append(record)
@@ -486,6 +488,7 @@ class IngestionService:
             "from_timestamp": latest_ts.isoformat(),
             "to_timestamp": now_utc.isoformat(),
             "records_inserted": len(records),
+            "records_skipped": skipped,
         }
 
     @staticmethod

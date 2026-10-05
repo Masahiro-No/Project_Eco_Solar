@@ -22,7 +22,7 @@
 | `POST` | `/api/jobs/{job_id}/retry` | ส่งงานเดิมเข้าคิวอีกครั้ง |
 | `DELETE` | `/api/jobs/{job_id}` | เอางานออกจากคิว |
 
-`GET /api/jobs/queues` นับเฉพาะงานที่รอ ช่อง `active` และ `failed` ยังเป็น 0 เสมอ เพราะยังไม่ได้อ่านค่าจาก worker
+`GET /api/jobs/queues` ตอบชื่อคิวกับจำนวนงานที่รอ (`pending`) ซึ่งนับจาก Redis โดยตรง งานที่กำลังรันและผลของงานดูรายตัวได้ที่ `GET /api/jobs/{job_id}`
 
 ## ไฟล์
 

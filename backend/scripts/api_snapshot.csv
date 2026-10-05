@@ -35,7 +35,7 @@ POST,/api/label-studio/ground-truth/submit,Submit Ground Truth,ส่ง GHI จ
 POST,/api/label-studio/ground-truth/batch-submit,Batch Submit Ground Truth,ส่ง GHI จริงหลายค่า (จากตารางหน้าเว็บ).,label-studio,Yes
 POST,/api/label-studio/ground-truth/upload/preview,Preview Ground Truth File,อ่านหัวตาราง + ตัวอย่างแถวของไฟล์ และเดาคอลัมน์เวลา/GHI ให้ผู้ใช้เลือกยืนยัน.,label-studio,Yes
 POST,/api/label-studio/ground-truth/upload,Upload Ground Truth File,นำเข้า GHI จริงจากไฟล์ CSV/XLSX เฉพาะแถวที่อยู่ในวันที่เลือก (เวลาไทย) ตามคอลัมน์ที่ผู้ใช้ระบุ.,label-studio,Yes
-GET,/api/jobs/queues,Summary of All Redis Task Queues,"สรุปภาพรวมของทุกคิวใน Redis (จำนวนงานที่รอ, กำลังรัน, พัง)",jobs,Yes
+GET,/api/jobs/queues,Summary of All Redis Task Queues,สรุปจำนวนงานที่รอในแต่ละคิวของ Redis,jobs,Yes
 GET,/api/jobs/queues/{name}/jobs,List Pending Jobs in a Specific Queue,ดูรายการ Job ทั้งหมดที่ค้างอยู่ในคิวที่เลือก,jobs,Yes
 DELETE,/api/jobs/queues/{name}/clear,Clear / Flush All Pending Jobs in a Queue,ล้างคิวงานทั้งหมด (Flush Pending Jobs),jobs,Yes
 POST,/api/jobs/{job_id}/retry,Retry a Failed Job,สั่งให้ Job ที่เคย Failed รันใหม่อีกครั้ง,jobs,Yes

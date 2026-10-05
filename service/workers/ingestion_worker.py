@@ -196,6 +196,10 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
                 try:
                     catchup_res = await IngestionService.auto_catchup_weather(db, station_id=st.id)
                     st_info["catchup_records"] = catchup_res.get("records_inserted", 0)
+                    if catchup_res.get("status") == "failed":
+                        logger.warning(f"[{st.id}] Weather catch-up stored nothing: {catchup_res.get('message')}")
+                    if catchup_res.get("records_skipped"):
+                        logger.warning(f"[{st.id}] {catchup_res['records_skipped']} weather slots not stored: no complete Open-Meteo values for them.")
                     if st_info["catchup_records"] > 0:
                         logger.info(f"[{st.id}] Healed {st_info['catchup_records']} missing weather intervals.")
                 except Exception as ce:

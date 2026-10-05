@@ -14,8 +14,6 @@ class JobStatusResponse(BaseModel):
 class QueueSummaryResponse(BaseModel):
     queue_name: str
     pending: int
-    active: int
-    failed: int
     total_keys: int
 
 

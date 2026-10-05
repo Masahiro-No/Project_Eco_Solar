@@ -462,8 +462,55 @@ def check_weather_grid():
     print("PASS weather grid (10-minute slots, mixed rows, gap rules)")
 
 
+def check_weather_ingestion():
+    """A weather row comes only from values Open-Meteo gave (pure functions)."""
+    from api.ingestion.normalizer import MissingWeatherValue, OPEN_METEO_VARIABLES, WeatherDataNormalizer
+
+    def refuses(call, key):
+        try:
+            call()
+        except MissingWeatherValue as e:
+            return key in str(e)
+        return False
+
+    # รอบสด: ครบทุกค่าจึงได้แถว; ขาดหรือเป็น null แม้ค่าเดียว ไม่มีแถว
+    current = {"time": "2026-10-05T03:15", "temperature_2m": 31.2, "relative_humidity_2m": 64, "surface_pressure": 1006.4,
+               "wind_speed_10m": 2.1, "cloud_cover": 40, "direct_normal_irradiance": 512.0, "shortwave_radiation": 640.0}
+    rec = WeatherDataNormalizer.normalize_open_meteo({"current": current}, "ST-TEST-99", lat=7.0, lon=100.5)
+    assert (rec.temperature, rec.relative_humidity, rec.surface_pressure, rec.dhi) == (31.2, 64.0, 1006.4, None)
+    assert rec.timestamp == datetime(2026, 10, 5, 3, 15, tzinfo=timezone.utc)
+    for key in ("time",) + OPEN_METEO_VARIABLES:
+        for broken in ({k: v for k, v in current.items() if k != key}, {**current, key: None}):
+            assert refuses(lambda: WeatherDataNormalizer.normalize_open_meteo({"current": broken}, "ST-TEST-99", lat=7.0, lon=100.5), key)
+
+    # ดึงย้อนหลัง: ค่าทุก 15 นาที 03:00-05:00 (ค่า = จำนวนนาทีหลัง 03:00) ลงช่อง 10 นาที
+    start = datetime(2026, 10, 5, 3, 0, tzinfo=timezone.utc)
+
+    def minutely(holes=()):
+        out = {"time": [(start + timedelta(minutes=15 * i)).strftime("%Y-%m-%dT%H:%M") for i in range(9)]}
+        out.update({k: [15.0 * i for i in range(9)] for k in OPEN_METEO_VARIABLES})
+        out["temperature_2m"] = [None if i in holes else v for i, v in enumerate(out["temperature_2m"])]
+        return out
+
+    def slots(rows):
+        return [int((t.to_pydatetime() - start).total_seconds() // 60) for t in rows.index]
+
+    full = WeatherDataNormalizer.open_meteo_ten_minute_rows(minutely())
+    assert slots(full) == list(range(0, 121, 10))
+    assert all(abs(v - m) < 1e-9 for c in OPEN_METEO_VARIABLES for v, m in zip(full[c], slots(full)))    # เส้นตรงตามเวลา
+    # ค่า 03:45 และ 04:00 ขาด: ช่องระหว่าง 03:30 กับ 04:15 ไม่ถูกเติม
+    assert slots(WeatherDataNormalizer.open_meteo_ten_minute_rows(minutely(holes=(3, 4)))) == [0, 10, 20, 30, 80, 90, 100, 110, 120]
+    # ค่าแรกและค่าสุดท้ายขาด: ไม่ลากค่าข้างเคียงไปเติมที่ปลาย
+    assert slots(WeatherDataNormalizer.open_meteo_ten_minute_rows(minutely(holes=(0, 8)))) == list(range(20, 101, 10))
+    # คำตอบไม่มีตัวแปรนั้นเลย
+    no_pressure = {k: v for k, v in minutely().items() if k != "surface_pressure"}
+    assert refuses(lambda: WeatherDataNormalizer.open_meteo_ten_minute_rows(no_pressure), "surface_pressure")
+    print("PASS weather ingestion (missing value -> no row, a gap in the source stays a gap)")
+
+
 if __name__ == "__main__":
     check_weather_grid()
+    check_weather_ingestion()
     check_frame_review()
     check_time_rules()
     check_sample_files()
