@@ -1,0 +1,14 @@
+# build context ของ ingestion-worker คือ root ของ repo (compose: context ".")
+# Dockerfile.ingestion ใช้แค่ backend/ กับ service/ จึงส่งเฉพาะสองโฟลเดอร์นี้
+*
+!backend/
+!service/
+
+# ...และตัดของหนัก/ไม่จำเป็นออกจากสองโฟลเดอร์นั้น
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+backend/.env
+backend/logs/
+service/tests/

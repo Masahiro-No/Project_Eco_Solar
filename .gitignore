@@ -12,4 +12,14 @@ mlflow.db
 # Whitelist model directory so teammates can use project models without MinIO
 !model/**
 
-**/__pycache__/
+**/__pycache__/
+
+# local secrets for docker compose
+.env
+
+# model backups made by the retrain jobs stay local
+model/**/backups/
+*.candidate
+
+# stale local dev database
+solardss.db

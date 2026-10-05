@@ -1,19 +1,31 @@
-FROM node:20-alpine AS deps
+FROM node:20-alpine AS base
 RUN apk add --no-cache libc6-compat
+RUN corepack enable
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm install --legacy-peer-deps
+FROM base AS deps
+COPY package.json pnpm-lock.yaml ./
+# --ignore-scripts: newer pnpm treats un-approved dependency build scripts as an error
+# (ERR_PNPM_IGNORED_BUILDS). None are needed here: Next.js ships its own SWC binary and
+# sharp/unrs-resolver/@parcel/watcher use prebuilt optional binaries. The cache mount keeps
+# re-builds from re-downloading every package.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --ignore-scripts
 
-FROM node:20-alpine AS builder
-WORKDIR /app
+FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# NEXT_PUBLIC_* values are inlined into the client bundle at build time,
+# so they must be provided as build args (not only as runtime env).
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_DEMO_MODE=false
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-RUN npm run build
+RUN pnpm build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
@@ -23,11 +35,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
+RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
 
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

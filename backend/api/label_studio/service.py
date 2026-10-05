@@ -40,6 +40,21 @@ class LabelStudioService:
         """คืนข้อมูล task."""
         return self.client.tasks.get(id=str(task_id))
 
+    def list_tasks_with_annotations(self, project_id: int) -> list:
+        """คืน tasks ทั้งหมดของ project พร้อม annotations (ใช้หา label ที่มีอยู่แล้ว).
+
+        ขอทีละ 1000 task: ค่าเริ่มต้นของ SDK แบ่งหน้าเล็ก ทำให้ 679 task ใช้ 24 วินาที (หน้าใหญ่ใช้ราว 10 วินาที)
+        """
+        return list(self.client.tasks.list(project=project_id, fields="all", page_size=1000))
+
+    def update_task(self, task_id: int, data: dict):
+        """แก้ data ของ task."""
+        return self.client.tasks.update(id=str(task_id), data=data)
+
+    def update_annotation(self, annotation_id: int, result: list[dict], ground_truth: bool = True):
+        """แก้ result ของ annotation เดิม."""
+        return self.client.annotations.update(id=annotation_id, result=result, ground_truth=ground_truth)
+
     def get_or_create_project(self, title: str, label_config: str):
         """คืน project ถ้ามีอยู่แล้ว หรือสร้างใหม่ถ้ายังไม่มี."""
         for p in self.list_projects():

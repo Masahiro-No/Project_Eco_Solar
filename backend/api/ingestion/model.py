@@ -26,7 +26,7 @@ class WeatherHistory(Base):
     cloud_cover: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     surface_pressure: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     
-    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "open_meteo", "nsrdb", "openweather"
+    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "open_meteo" (live), "open_meteo_catchup"
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

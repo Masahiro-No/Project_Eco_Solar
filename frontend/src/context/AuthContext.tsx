@@ -1,21 +1,31 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { API_BASE_URL } from '@/lib/config';
+import { UNAUTHORIZED_EVENT } from '@/services/api';
+
+export type UserRole = 'operator' | 'admin';
 
 export type User = {
   id?: number;
   name: string;
   email: string;
-  role: string;
+  /** operator = read forecasts and decisions; admin = also label data and manage stations */
+  role: UserRole;
   avatar?: string;
 };
+
+export type RegisterResult = { success: boolean; error?: string; code?: 'exists' | 'invalid' | 'network' };
 
 type AuthContextType = {
   user: User | null;
   token: string | null;
   isLoggedIn: boolean;
+  isAdmin: boolean;
   isLoading: boolean;
   login: (email?: string, password?: string, name?: string) => Promise<{ success: boolean; error?: string }>;
+  /** Creates an operator account and signs in. Admin rights are given by an admin, never by sign-up. */
+  register: (email: string, password: string) => Promise<RegisterResult>;
   logout: () => void;
 };
 
@@ -23,150 +33,158 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   token: null,
   isLoggedIn: false,
+  isAdmin: false,
   isLoading: false,
   login: async () => ({ success: false }),
+  register: async () => ({ success: false }),
   logout: () => {},
 });
 
-const DEFAULT_OPERATOR: User = {
-  name: 'Grid Operator',
-  email: 'operator@solardss.io',
-  role: 'Chief Dispatcher',
-};
+/** Expiry time (ms since epoch) of a JWT, or null if it cannot be read. */
+function tokenExpiry(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+function clearStoredSession() {
+  localStorage.removeItem('solar_user');
+  localStorage.removeItem('solar_token');
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  // true until the stored session has been read, so route guards don't redirect too early
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
+  const logout = useCallback(() => {
+    setUser(null);
+    setToken(null);
+    clearStoredSession();
+  }, []);
+
+  // Restore the stored session only while its token is still valid
   useEffect(() => {
-    const savedUser = localStorage.getItem('solar_user');
-    const savedToken = localStorage.getItem('solar_token');
-
-    if (savedToken) {
-      setToken(savedToken);
-    }
-
-    if (savedUser) {
-      try {
+    try {
+      const savedUser = localStorage.getItem('solar_user');
+      const savedToken = localStorage.getItem('solar_token');
+      const expiry = savedToken ? tokenExpiry(savedToken) : null;
+      if (savedUser && savedToken && expiry !== null && expiry > Date.now()) {
+        setToken(savedToken);
         setUser(JSON.parse(savedUser));
-      } catch {
-        setUser(null);
+      } else {
+        clearStoredSession();
       }
+    } catch {
+      clearStoredSession();
     }
     setIsLoading(false);
   }, []);
 
-  const login = async (
-    email?: string,
-    password?: string,
-    customName?: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    setIsLoading(true);
+  // End the session when the token expires, or as soon as the backend answers 401
+  useEffect(() => {
+    if (!token) return;
+    const expiry = tokenExpiry(token);
+    const timer = expiry !== null ? window.setTimeout(logout, Math.max(0, expiry - Date.now())) : undefined;
+    window.addEventListener(UNAUTHORIZED_EVENT, logout);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      window.removeEventListener(UNAUTHORIZED_EVENT, logout);
+    };
+  }, [token, logout]);
 
-    const targetEmail = (email || DEFAULT_OPERATOR.email).trim();
-    const targetPassword = password || 'operator1234';
+  const login = useCallback(
+    async (email?: string, password?: string, customName?: string): Promise<{ success: boolean; error?: string }> => {
+      const targetEmail = (email ?? '').trim();
+      const targetPassword = password ?? '';
 
-    // 1. Attempt Real Backend API Login (FastAPI POST /api/auth/login)
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: targetEmail, password: targetPassword }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const accessToken = data.access_token;
-        setToken(accessToken);
-        localStorage.setItem('solar_token', accessToken);
-
-        // Fetch User Info (/api/auth/me)
-        try {
-          const meRes = await fetch(`${API_BASE_URL}/api/auth/me`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (meRes.ok) {
-            const meData = await meRes.json();
-            const loggedUser: User = {
-              id: meData.id,
-              name: customName || meData.email.split('@')[0].replace(/[._]/g, ' '),
-              email: meData.email,
-              role: DEFAULT_OPERATOR.role,
-            };
-            setUser(loggedUser);
-            localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-            setIsLoading(false);
-            return { success: true };
-          }
-        } catch (meErr) {
-          console.warn('Could not fetch /api/auth/me, using fallback profile', meErr);
-        }
-
-        // Fallback user profile with token
-        const loggedUser: User = {
-          name: customName || targetEmail.split('@')[0],
-          email: targetEmail,
-          role: DEFAULT_OPERATOR.role,
-        };
-        setUser(loggedUser);
-        localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-        setIsLoading(false);
-        return { success: true };
-      } else {
-        // Backend returned error status
-        const errData = await response.json().catch(() => null);
-        const detail = errData?.detail || 'Invalid email or password';
-        console.warn(`[Backend Auth] Login rejected (${response.status}):`, detail);
-
-        // Demo fallback for operator demo testing
-        if (targetEmail === DEFAULT_OPERATOR.email || targetEmail === 'Grid Operator') {
-          const loggedUser: User = {
-            name: customName || DEFAULT_OPERATOR.name,
-            email: DEFAULT_OPERATOR.email,
-            role: DEFAULT_OPERATOR.role,
-          };
-          setUser(loggedUser);
-          localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-          setIsLoading(false);
-          return { success: true };
-        }
-
-        setIsLoading(false);
-        return { success: false, error: detail };
+      if (!targetEmail || !targetPassword) {
+        return { success: false, error: 'Invalid email or password' };
       }
-    } catch {
-      console.info('[Backend Auth] API unreachable, using seamless offline demo mode.');
-      // 2. Seamless Demo Fallback when backend server is offline
-      const loggedUser: User = {
-        name:
-          customName ||
-          (targetEmail.includes('@') ? targetEmail.split('@')[0] : targetEmail) ||
-          DEFAULT_OPERATOR.name,
-        email: targetEmail.includes('@') ? targetEmail : DEFAULT_OPERATOR.email,
-        role: DEFAULT_OPERATOR.role,
-      };
-      setUser(loggedUser);
-      localStorage.setItem('solar_user', JSON.stringify(loggedUser));
-      setIsLoading(false);
-      return { success: true };
-    }
-  };
 
-  const logout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('solar_user');
-    localStorage.removeItem('solar_token');
-  };
+      setIsLoading(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: targetEmail, password: targetPassword }),
+        });
 
-  return (
-    <AuthContext.Provider value={{ user, token, isLoggedIn: !!user, isLoading, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+        if (!response.ok) {
+          const errData = await response.json().catch(() => null);
+          const detail = errData?.detail || 'Invalid email or password';
+          return { success: false, error: typeof detail === 'string' ? detail : 'Invalid email or password' };
+        }
+
+        const data = await response.json();
+        const accessToken: string = data.access_token;
+
+        // The profile (and the role) always comes from the backend
+        const meRes = await fetch(`${API_BASE_URL}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!meRes.ok) {
+          return { success: false, error: 'Could not load the user profile' };
+        }
+        const me = await meRes.json();
+        const loggedUser: User = {
+          id: me.id,
+          name: customName || String(me.email).split('@')[0].replace(/[._]/g, ' '),
+          email: me.email,
+          role: me.role === 'admin' ? 'admin' : 'operator',
+        };
+
+        setToken(accessToken);
+        setUser(loggedUser);
+        localStorage.setItem('solar_token', accessToken);
+        localStorage.setItem('solar_user', JSON.stringify(loggedUser));
+        return { success: true };
+      } catch {
+        return { success: false, error: 'Cannot reach the server. Please try again later.' };
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    []
   );
+
+  const register = useCallback(
+    async (email: string, password: string): Promise<RegisterResult> => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), password }),
+        });
+        if (res.status === 409) return { success: false, code: 'exists' };
+        if (!res.ok) return { success: false, code: 'invalid' };
+      } catch {
+        return { success: false, code: 'network' };
+      }
+      return login(email, password);
+    },
+    [login]
+  );
+
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      isLoggedIn: !!user && !!token,
+      isAdmin: user?.role === 'admin',
+      isLoading,
+      login,
+      register,
+      logout,
+    }),
+    [user, token, isLoading, login, register, logout]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

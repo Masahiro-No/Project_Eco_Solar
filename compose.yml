@@ -1,3 +1,6 @@
+# Zones: only the web UI (3000) and the API (8000) are published on all interfaces.
+# Everything else (Label Studio, MinIO, MLflow, Grafana, Postgres, Redis, ...) is bound to 127.0.0.1:
+# developer tools reachable from the server itself only.
 services:
   # -------------------------
   # Redis
@@ -7,7 +10,7 @@ services:
     container_name: redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
       - ./logs:/logs
@@ -35,7 +38,7 @@ services:
       POSTGRES_PASSWORD: mypassword
       POSTGRES_DB: mydatabase
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgresql-data:/var/lib/postgresql/data
       - ./logs:/logs
@@ -59,7 +62,7 @@ services:
     container_name: label-studio
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       DJANGO_DB: default
       POSTGRE_HOST: postgres
@@ -72,6 +75,8 @@ services:
       LOG_DIR: /logs
     volumes:
       - ./logs:/logs
+      # keeps Label Studio's generated SECRET_KEY: without it every recreate invalidates the API token in .env
+      - label-studio-data:/label-studio/data
     command: sh -c "label-studio start 2>&1 | tee /logs/label_studio.log"
     logging:
       driver: "json-file"
@@ -87,8 +92,8 @@ services:
     container_name: minio_service
     restart: unless-stopped
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     environment:
       MINIO_ROOT_USER: "admin"
       MINIO_ROOT_PASSWORD: "password"
@@ -119,11 +124,14 @@ services:
     environment:
       database_url: "postgresql+asyncpg://myuser:mypassword@postgres/mydatabase"
       label_studio_url: "http://label-studio:8080"
-      label_studio_api_key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc5MDk1MTIwMiwiaWF0IjoxNzkwODY0ODAyLCJqdGkiOiI4ODQ1NWEzNzk3Mzk0NDI3OWZhMjI2Mjk5YTZlYWYwYyIsInVzZXJfaWQiOiIxIn0.g6xdTALwRbv6YbZ9ghS0wP4w8fgfkdc59GXGKwDEdPc"
+      label_studio_api_key: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
       minio_endpoint: "minio:9000"
       redis_host: "redis"
       redis_port: "6379"
-      ENABLE_RETRAIN: "false"
+      ENABLE_RETRAIN: "${ENABLE_RETRAIN:-false}"  # one switch for LSTM and ConvLSTM retraining (.env)
+      # admin account (private zone); the password lives in the git-ignored .env
+      admin_email: "${ADMIN_EMAIL:-admin@solardss.io}"
+      admin_password: "${ADMIN_PASSWORD:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "fastapi"
       OTEL_RESOURCE_ATTRIBUTES: "service.version=0.1.0"
@@ -153,6 +161,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_DEMO_MODE: "false"
     container_name: frontend
     restart: unless-stopped
     ports:
@@ -189,14 +200,28 @@ services:
       MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
       AWS_ACCESS_KEY_ID: "admin"
       AWS_SECRET_ACCESS_KEY: "password"
-      ENABLE_RETRAIN: "false"
+      ENABLE_RETRAIN: "${ENABLE_RETRAIN:-false}"  # one switch for LSTM and ConvLSTM retraining (.env)
       LOG_DIR: /workspace/logs
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "trainer-worker"
+      # --- LSTM retrain (อ่าน weather_history/ground_truth_labels จาก Postgres) ---
+      DATABASE_URL: "postgresql+psycopg2://myuser:mypassword@postgres/mydatabase"
+      RETRAIN_LOOKBACK_DAYS: "45"
+      LABEL_STUDIO_URL: "http://label-studio:8080"
+      LABEL_STUDIO_API_KEY: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
+      RETRAIN_MAX_REGRESSION_RATIO: "1.0"
+      # --- ConvLSTM retrain on real satellite frames (starts when a batch of new daytime scans is complete) ---
+      CONVLSTM_RETRAIN_THRESHOLD: "50"
+      CONVLSTM_RETRAIN_EPOCHS: "6"
+      CONVLSTM_LOOKBACK_DAYS: "5"
+      CONVLSTM_MAX_TRAIN_SEQUENCES: "300"
+      CONVLSTM_MAX_REGRESSION_RATIO: "1.0"
     depends_on:
       redis:
         condition: service_healthy
       mlflow:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     volumes:
       - ./logs:/workspace/logs
@@ -225,7 +250,7 @@ services:
     container_name: mlflow
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     environment:
       MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
       AWS_ACCESS_KEY_ID: "admin"
@@ -272,6 +297,21 @@ services:
       LOG_DIR: /workspace/logs
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "inference-worker"
+      # --- LSTM + satellite blend: w(t) = BLEND_W0 * exp(-t / BLEND_TAU_MIN), t in minutes ---
+      BLEND_W0: "0.9"
+      BLEND_TAU_MIN: "102"
+      # --- cloud coverage in the AOI around the station ---
+      CLOUD_AOI_SIZE_PX: "5"
+      CLOUD_REFLECTANCE_THRESHOLD: "0.25"
+      # satellite cloud cover per lead time: observed value up to the first, ConvLSTM forecast from the second (minutes)
+      CLOUD_OBSERVED_UNTIL_MIN: "30"
+      CLOUD_MODEL_FROM_MIN: "90"
+      # no complete 12-frame window (daily scan gap): hold the newest real frame at most this long (minutes)
+      CLOUD_OBSERVED_HOLD_MAX_MIN: "60"
+      # target at a time of day = min(P_target, this share of the clear-sky output)
+      TARGET_CLEARSKY_FRACTION: "0.8"
+      # --- missing satellite frames: shift the 12-frame window back at most this far ---
+      SATELLITE_MAX_SHIFT_MIN: "30"
     depends_on:
       redis:
         condition: service_healthy
@@ -308,6 +348,9 @@ services:
       redis_port: 6379
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "ingestion-worker"
+      # the ingestion round also starts the ConvLSTM retrain when this many new daytime scans arrived
+      ENABLE_RETRAIN: "${ENABLE_RETRAIN:-false}"
+      CONVLSTM_RETRAIN_THRESHOLD: "50"
       OTEL_RESOURCE_ATTRIBUTES: "service.version=0.2.0"
       LOG_DIR: "/workspace/logs"
       PYTHONPATH: "/workspace:/workspace/backend:/workspace/service"
@@ -320,6 +363,8 @@ services:
       - ./logs:/workspace/logs
       - ./backend:/workspace/backend
       - ./service:/workspace/service
+      # read-only: lookback_steps of the deployed LSTM (model_meta.json) decides how much history to send
+      - ./model:/workspace/model:ro
     logging:
       driver: "json-file"
       options:
@@ -339,9 +384,9 @@ services:
     volumes:
       - ./observability/otel-collector.yml:/etc/otel/otel-collector.yml:ro
     ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "8889:8889"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:8889:8889"
     depends_on:
       - loki
       - tempo
@@ -359,7 +404,7 @@ services:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
   # Loki
   loki:
@@ -371,7 +416,7 @@ services:
       - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki-data:/loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
 
   # Tempo
   tempo:
@@ -383,8 +428,8 @@ services:
       - ./observability/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200"
-      - "4327:4317"
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4327:4317"
 
   # Promtail — เก็บ Log จาก Docker Containers ส่งไป Loki
   promtail:
@@ -412,7 +457,7 @@ services:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "3002:3000"
+      - "127.0.0.1:3002:3000"
     depends_on:
       - prometheus
       - loki
@@ -421,6 +466,7 @@ services:
 volumes:
   redis-data:
   postgresql-data:
+  label-studio-data:
   minio_data:
   prometheus-data:
   loki-data:

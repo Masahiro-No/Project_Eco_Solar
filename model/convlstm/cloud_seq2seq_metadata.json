@@ -1,6 +1,6 @@
 {
   "model_name": "Himawari Spatio-Temporal Seq2Seq ConvLSTM Cloud Nowcasting",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "created_at": "2026-10-01",
   "system": "Solar Forecast & Decision Support System (DSS)",
   "architecture": "Encoder-Decoder ConvLSTM (Seq2Seq)",
@@ -8,93 +8,135 @@
   "onnx_opset": 14,
   "input_spec": {
     "tensor_name": "satellite_sequence_12",
-    "shape": ["batch_size", 12, 1, 64, 64],
+    "shape": [
+      "batch_size",
+      12,
+      1,
+      64,
+      64
+    ],
     "dtype": "float32",
     "channels": 1,
-    "channel_description": "Himawari-8/9 Band 03 Visible Reflectance (or Band 13 Clean IR)",
+    "channel_description": "Himawari-8/9 Band 03 visible (0.64 um), 64x64 crop of the NICT level-2d tile centred on the station",
     "temporal_lookback": {
       "num_frames": 12,
       "interval_minutes": 10,
       "total_hours": 2.0,
-      "frame_offsets": ["-110m", "-100m", "-90m", "-80m", "-70m", "-60m", "-50m", "-40m", "-30m", "-20m", "-10m", "t_0"]
+      "frame_offsets": [
+        "-110m",
+        "-100m",
+        "-90m",
+        "-80m",
+        "-70m",
+        "-60m",
+        "-50m",
+        "-40m",
+        "-30m",
+        "-20m",
+        "-10m",
+        "t_0"
+      ]
     },
     "preprocessing": {
       "normalization": "minmax",
       "formula": "pixel_val / 255.0",
-      "value_range": [0.0, 1.0]
+      "value_range": [
+        0.0,
+        1.0
+      ]
     }
   },
   "output_spec": {
     "tensor_name": "future_satellite_sequence_18",
-    "shape": ["batch_size", 18, 1, 64, 64],
+    "shape": [
+      "batch_size",
+      18,
+      1,
+      64,
+      64
+    ],
     "dtype": "float32",
     "temporal_forecast": {
       "num_frames": 18,
       "interval_minutes": 10,
       "total_hours": 3.0,
-      "frame_offsets": ["+10m", "+20m", "+30m", "+40m", "+50m", "+60m", "+70m", "+80m", "+90m", "+100m", "+110m", "+120m", "+130m", "+140m", "+150m", "+160m", "+170m", "+180m"]
+      "frame_offsets": [
+        "+10m",
+        "+20m",
+        "+30m",
+        "+40m",
+        "+50m",
+        "+60m",
+        "+70m",
+        "+80m",
+        "+90m",
+        "+100m",
+        "+110m",
+        "+120m",
+        "+130m",
+        "+140m",
+        "+150m",
+        "+160m",
+        "+170m",
+        "+180m"
+      ]
     },
     "value_meaning": {
       "min": 0.0,
       "max": 1.0,
-      "description": "0.0 = Clear Sky / No Cloud Shading, 1.0 = Dense Overcast Cloud Shadow"
+      "description": "Predicted Band 03 brightness (same scale as the input: pixel / 255). Clouds are bright; the cloud mask is taken after dividing by cos(solar zenith)."
     }
   },
   "backend_integration": {
-    "center_roi": {
+    "aoi": {
       "width": 5,
       "height": 5,
       "center_x": 32,
       "center_y": 32,
-      "description": "Coordinates of Solar Farm / Radiation Pyranometer sensor at domain center"
+      "description": "5x5 px box at the station (about 78 x 55 km); cloud fraction C = cloudy pixels / 25"
     },
-    "cloud_index_extraction": {
-      "method": "mean_pixel_intensity_over_center_roi",
-      "output_name": "CI",
-      "output_shape": [18],
-      "value_range": [0.0, 1.0]
+    "cloud_mask": {
+      "rule": "pixel / cos(solar zenith) >= 0.25",
+      "min_cos_zenith": 0.3,
+      "code": "service/workers/cloud_coverage.py"
     },
-    "ghi_modulation_formula": {
-      "equation": "GHI_final(t) = GHI_lstm(t) * (1.0 - CI_t)",
-      "target_matching": "1-to-1 matching with 18 steps of Time-Series LSTM forecast"
-    }
-  },
-  "decision_engine_bess": {
-    "optical_flow_algorithm": "Farneback Dense Optical Flow",
-    "classification_thresholds": {
-      "clear_threshold": 0.20,
-      "overcast_threshold": 0.70,
-      "motion_radial_threshold": 0.05
-    },
-    "states": {
-      "Clear": {
-        "th": "ท้องฟ้าโปร่ง",
-        "description": "ฟ้าโปร่ง ไร้เมฆบดบัง แดดดีต่อเนื่อง",
-        "bess_advisory": "คงการชาร์จแบตเตอรี่ปกติ ไม่จำเป็นต้องสำรองไฟฉุกเฉิน"
-      },
-      "Inward": {
-        "th": "เคลื่อนที่เข้า",
-        "description": "กลุ่มเมฆพุ่งเข้าหาฟาร์ม แดดจะตกเฉียบพลัน",
-        "bess_advisory": "แจ้งเตือนแดดดรอปเฉียบพลัน! สั่งเตรียมปล่อยกำลังไฟ BESS Ramp-up รองรับ"
-      },
-      "Outward": {
-        "th": "เคลื่อนที่ออก",
-        "description": "กลุ่มเมฆพ้นสถานีออกไป แดดเริ่มฟื้นตัว",
-        "bess_advisory": "กลุ่มเมฆกำลังพ้นสถานี แดดจะฟื้นตัวกลับมา เตรียมลดการจ่ายไฟ BESS"
-      },
-      "Overcast": {
-        "th": "เมฆแช่นิ่ง",
-        "description": "เมฆหนาทึบปกคลุมแช่นิ่งต่อเนื่อง ฟ้าปิดสนิท",
-        "bess_advisory": "เตรียมจ่ายไฟจาก BESS เสริมความเสถียร แดดตกต่ำต่อเนื่องยาวนาน 3 ชม."
-      }
+    "clear_sky_index": "k = 1 - 0.75 * C^3.4 (Kasten & Czeplak 1980)",
+    "blend": {
+      "equation": "GHI_blend(t) = w(t) * k(t) * GHI_clearsky(t) + (1 - w(t)) * GHI_lstm(t)",
+      "weight": "w(t) = 0.9 * exp(-t / 102 min), t = minutes after the newest real frame",
+      "code": "service/workers/ghi_blend.py"
     }
   },
   "performance_benchmarks": {
-    "file_size_mb": 2.57,
+    "file_size_mb": 2.7,
     "cpu_inference_latency_ms": 93.4,
-    "pytorch_onnx_max_deviation": 1.46e-6,
-    "validation_composite_loss": 0.1470,
-    "validation_mse": 0.0084,
-    "validation_ssim": 0.7379
+    "pytorch_onnx_max_deviation": 4.470348358154297e-07,
+    "validation_composite_loss": 0.147,
+    "validation_mse": 0.00806,
+    "validation_ssim": 0.6324
+  },
+  "retrained_at": "2026-10-05 10:25:13 UTC",
+  "retrain": {
+    "base_version": "1.0.1",
+    "data": "real Himawari Band 03 crops from the MinIO cache (daytime, 10-minute steps)",
+    "frames_from": "2026-10-02T02:50:00+00:00",
+    "frames_to": "2026-10-04T10:40:00+00:00",
+    "train_sequences": 136,
+    "val_sequences": 39,
+    "best_epoch": 6,
+    "baseline": {
+      "mse": 0.008770285174250603,
+      "mae": 0.06645306199789047,
+      "ssim": 0.5680102705955505,
+      "aoi_cloud_mae_pct": 19.85,
+      "aoi_frames": 654
+    },
+    "candidate": {
+      "mse": 0.008060635067522526,
+      "mae": 0.0641295537352562,
+      "ssim": 0.6323761343955994,
+      "aoi_cloud_mae_pct": 15.86,
+      "aoi_frames": 654
+    }
   }
 }

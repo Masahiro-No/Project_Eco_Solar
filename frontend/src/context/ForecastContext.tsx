@@ -1,227 +1,226 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { solarApi, PredictionResultData, StationResponse } from '@/services/api';
-import {
-  generateTimeSeriesPrediction,
-  TIME_SERIES_MODEL_META,
-  ModelMetadata,
-  TimeSeriesPredictionOutput
-} from '@/services/timeSeriesModel';
-import { ghiData, powerData, stations as fallbackStations } from '@/data/dashboard';
+import { forecastTimeLabel } from '@/lib/time';
 
 export type GhiChartPoint = {
   t: string;
-  actual?: number | null;
-  predicted: number;
-  band: [number, number] | number[];
+  /** Final forecast: LSTM blended with the satellite cloud forecast */
+  blend: number;
+  /** LSTM forecast before blending */
+  lstm: number | null;
+  /** Weight of the satellite branch at this step, in % */
+  weightPct: number | null;
+  /** Forecast cloud cover in the area around the station, in % */
+  cloudPct: number | null;
+  /** Expected loss of GHI against clear sky from the satellite branch, in % */
+  lossPct: number | null;
+  /** Typical error range [lower, upper] of the blended forecast; null when the model has no error metrics */
+  band: [number, number] | null;
 };
 
 export type PowerChartPoint = {
   t: string;
   gen: number;
+  /** Target at this time: follows the sun, never above P_target */
   target: number;
-  gap: [number, number];
+  /** Typical error range [lower, upper] of P_gen */
+  band: [number, number] | null;
 };
 
 export type ForecastContextType = {
+  /** true = a real model forecast of the selected station is on screen */
   isLive: boolean;
-  isLocalModel: boolean;
   isLoading: boolean;
+  error: string | null;
+  /** When the latest prediction was produced (null if there is none) */
+  lastUpdated: string | null;
   stations: StationResponse[];
+  stationsLoaded: boolean;
   selectedStationId: string;
   selectedStation: StationResponse | null;
   setSelectedStationId: (id: string) => void;
   prediction: PredictionResultData | null;
-  localPrediction: TimeSeriesPredictionOutput | null;
-  modelMeta: ModelMetadata;
-  refreshForecast: (stationId?: string) => Promise<void>;
+  refreshForecast: (stationId?: string, opts?: { silent?: boolean }) => Promise<void>;
+  reloadStations: () => Promise<void>;
   chartGhiData: GhiChartPoint[];
   chartPowerData: PowerChartPoint[];
 };
 
-const initialFallbackStations: StationResponse[] = fallbackStations.map((s) => ({
-  id: s.id,
-  name: s.name,
-  latitude: s.latitude,
-  longitude: s.longitude,
-  panel_area: s.panel_area,
-  efficiency: s.efficiency,
-  target_capacity_kw: s.target_capacity_kw,
-  is_active: s.is_active,
-}));
-
 const ForecastContext = createContext<ForecastContextType>({
   isLive: false,
-  isLocalModel: true,
   isLoading: false,
-  stations: initialFallbackStations,
-  selectedStationId: 'ST-001',
-  selectedStation: initialFallbackStations[0],
+  error: null,
+  lastUpdated: null,
+  stations: [],
+  stationsLoaded: false,
+  selectedStationId: '',
+  selectedStation: null,
   setSelectedStationId: () => {},
   prediction: null,
-  localPrediction: null,
-  modelMeta: TIME_SERIES_MODEL_META,
   refreshForecast: async () => {},
-  chartGhiData: ghiData,
-  chartPowerData: powerData,
+  reloadStations: async () => {},
+  chartGhiData: [],
+  chartPowerData: [],
 });
 
-export function ForecastProvider({
-  children,
-  currentStation,
-}: {
-  children: React.ReactNode;
-  currentStation?: string;
-}) {
-  const [stations, setStations] = useState<StationResponse[]>(initialFallbackStations);
-  const [selectedStationId, setSelectedStationId] = useState<string>('ST-001');
-  const [prediction, setPrediction] = useState<PredictionResultData | null>(null);
-  const [localPrediction, setLocalPrediction] = useState<TimeSeriesPredictionOutput | null>(null);
-  const [isLive, setIsLive] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+/** Error range of step i, scaled (1 for GHI, kW per W/m² for power). */
+function bandOf(p: PredictionResultData, i: number, scale: number): [number, number] | null {
+  const lo = p.ghi_forecast_lower?.[i];
+  const hi = p.ghi_forecast_upper?.[i];
+  if (lo === undefined || lo === null || hi === undefined || hi === null) return null;
+  return [Math.round(lo * scale), Math.round(hi * scale)];
+}
 
-  // 1. Fetch dynamic station list from Database API on mount
-  useEffect(() => {
-    async function loadStations() {
-      const list = await solarApi.getStations();
-      if (list && list.length > 0) {
-        setStations(list);
-      }
+/** How often the dashboard re-reads the latest prediction (the backend produces one every 10 min). */
+const POLL_INTERVAL_MS = 60_000;
+
+export function ForecastProvider({ children }: { children: React.ReactNode }) {
+  const [stations, setStations] = useState<StationResponse[]>([]);
+  const [stationsLoaded, setStationsLoaded] = useState(false);
+  const [selectedStationId, setSelectedStationId] = useState<string>('');
+  const [prediction, setPrediction] = useState<PredictionResultData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Guards against out-of-order responses when the station changes quickly
+  const requestSeq = useRef(0);
+  const predictionRef = useRef<PredictionResultData | null>(null);
+  predictionRef.current = prediction;
+
+  const reloadStations = useCallback(async () => {
+    const list = await solarApi.getStations();
+    setStations(list ?? []);
+    setStationsLoaded(true);
+    if (list && list.length > 0) {
+      setSelectedStationId((cur) => (cur && list.some((s) => s.id === cur) ? cur : list[0].id));
     }
-    loadStations();
   }, []);
 
-  const selectedStation = stations.find((s) => s.id === selectedStationId) || stations[0] || null;
+  useEffect(() => {
+    reloadStations();
+  }, [reloadStations]);
 
-  const fetchForecast = async (stationId?: string) => {
-    const targetId = stationId || selectedStationId || 'ST-001';
-    setIsLoading(true);
+  const selectedStation = useMemo(
+    () => stations.find((s) => s.id === selectedStationId) || null,
+    [stations, selectedStationId]
+  );
 
-    const st = stations.find((s) => s.id === targetId) || selectedStation;
-    const targetKw = st?.target_capacity_kw || 5000;
-    const panelArea = st?.panel_area || 30000;
-    const efficiency = st?.efficiency || 0.185;
-    const stationName = st?.name || currentStation || 'PSU Hat Yai Solar Farm (ม.อ. หาดใหญ่)';
+  const fetchForecast = useCallback(
+    async (stationId?: string, opts?: { silent?: boolean }) => {
+      const silent = !!opts?.silent;
+      const targetId = stationId || selectedStationId;
+      if (!targetId) return;
+      const seq = ++requestSeq.current;
+      if (!silent) setIsLoading(true);
+      setError(null);
 
-    // 1. Try to fetch from live backend if available
-    const data = await solarApi.getLatestPrediction(targetId);
-    if (data && data.ghi_forecast_curve && data.ghi_forecast_curve.length > 0) {
-      setPrediction(data);
-      setIsLive(true);
-    } else {
-      // 2. Pure Frontend Time-Series Model Engine (Direct from model_meta.json specs)
-      setIsLive(false);
-      const localResult = generateTimeSeriesPrediction(targetId, stationName, targetKw, panelArea, efficiency);
-      setLocalPrediction(localResult);
-    }
-    setIsLoading(false);
-  };
+      try {
+        const data = await solarApi.getLatestPrediction(targetId);
+        if (seq !== requestSeq.current) return; // a newer request superseded this one
+
+        if (data && data.ghi_forecast_curve && data.ghi_forecast_curve.length > 0) {
+          setPrediction(data);
+        } else if (!(silent && predictionRef.current?.station_id === targetId)) {
+          // No real forecast for this station: show nothing rather than a substitute.
+          // (A failed background refresh keeps the last real result; its age is shown to the user.)
+          setPrediction(null);
+        }
+      } catch (err) {
+        if (seq !== requestSeq.current) return;
+        console.error('[ForecastProvider] forecast failed', err);
+        setError('Unable to load forecast');
+        if (!(silent && predictionRef.current?.station_id === targetId)) setPrediction(null);
+      } finally {
+        if (seq === requestSeq.current && !silent) setIsLoading(false);
+      }
+    },
+    [selectedStationId]
+  );
 
   useEffect(() => {
+    setPrediction(null);
     fetchForecast(selectedStationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStationId]);
 
-  // Build GHI Chart Data:
-  let chartGhiData: GhiChartPoint[] = ghiData;
+  // Auto-refresh: pick up each new 10-minute prediction without a page reload
+  const fetchRef = useRef(fetchForecast);
+  fetchRef.current = fetchForecast;
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') {
+        fetchRef.current(selectedStationId, { silent: true });
+      }
+    };
+    const id = setInterval(refresh, POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [selectedStationId]);
 
-  if (isLive && prediction?.ghi_forecast_curve && prediction.ghi_forecast_curve.length > 0) {
-    const curve = prediction.ghi_forecast_curve;
-    chartGhiData = curve.map((val, i) => {
-      const predVal = Math.round(val);
-      const timeLabel = `+${(i + 1) * 10}m`;
+  const isLive = !!prediction;
+
+  const chartGhiData = useMemo<GhiChartPoint[]>(() => {
+    if (!prediction) return [];
+    const base = prediction.data_time || prediction.predicted_at;
+    return prediction.ghi_forecast_curve.map((v, i) => {
+      const lstm = prediction.ghi_forecast_lstm_raw?.[i];
+      const w = prediction.blend_weight?.[i];
+      const c = prediction.cloud_coverage_pct?.[i];
+      const loss = prediction.sat_ghi_loss_pct?.[i];
       return {
-        t: timeLabel,
-        predicted: predVal,
-        actual: i < 3 ? Math.round(predVal * 0.98) : undefined,
-        band: [Math.max(0, predVal - 45), predVal + 45],
+        t: forecastTimeLabel(base, i + 1),
+        blend: Math.round(v),
+        lstm: lstm === undefined || lstm === null ? null : Math.round(lstm),
+        weightPct: w === undefined || w === null ? null : Math.round(w * 100),
+        cloudPct: c === undefined || c === null ? null : Math.round(c),
+        lossPct: loss === undefined || loss === null ? null : Math.round(loss),
+        band: bandOf(prediction, i, 1),
       };
     });
-  } else if (localPrediction && localPrediction.ghi_forecast_curve.length > 0) {
-    const curve = localPrediction.ghi_forecast_curve;
-    const timestamps = localPrediction.timestamps;
-    const actuals = localPrediction.actual_curve;
+  }, [prediction]);
 
-    chartGhiData = curve.map((val, i) => {
-      const predVal = Math.round(val);
-      const bandLow = Math.max(0, predVal - 45);
-      const bandHigh = predVal + 45;
-      return {
-        t: timestamps[i] || `+${(i + 1) * 10}m`,
-        predicted: predVal,
-        actual: actuals[i] !== null ? actuals[i] : undefined,
-        band: [bandLow, bandHigh],
-      };
-    });
-  }
+  const chartPowerData = useMemo<PowerChartPoint[]>(() => {
+    if (!prediction || !selectedStation) return [];
+    const base = prediction.data_time || prediction.predicted_at;
+    // Same formula as the backend decision rules: P_gen = A * eta * GHI / 1000, on the blended GHI
+    const kwPerWm2 = (selectedStation.panel_area * selectedStation.efficiency) / 1000;
+    return prediction.ghi_forecast_curve.map((ghi, i) => ({
+      t: forecastTimeLabel(base, i + 1),
+      gen: Math.round(kwPerWm2 * ghi),
+      band: bandOf(prediction, i, kwPerWm2),
+      target: Math.round(prediction.target_profile_kw?.[i] ?? prediction.target_power_kw),
+    }));
+  }, [prediction, selectedStation]);
 
-  // Build Power Chart Data:
-  let chartPowerData: PowerChartPoint[] = powerData;
-
-  if (isLive && prediction) {
-    const target = prediction.target_power_kw || (selectedStation?.target_capacity_kw ?? 5000);
-    const curve = prediction.ghi_forecast_curve || [];
-    const panelArea = selectedStation?.panel_area || 30000;
-    const efficiency = selectedStation?.efficiency || 0.185;
-
-    const sampledPower: PowerChartPoint[] = [];
-    for (let i = 0; i < curve.length; i += 2) {
-      const ghi = curve[i];
-      const pgen = Math.round((panelArea * efficiency * ghi) / 1000);
-      sampledPower.push({
-        t: `+${(i + 1) * 10}m`,
-        gen: pgen,
-        target,
-        gap: [pgen, target],
-      });
-    }
-    if (sampledPower.length > 0) {
-      chartPowerData = sampledPower;
-    }
-  } else if (localPrediction && localPrediction.ghi_forecast_curve.length > 0) {
-    const target = localPrediction.target_power_kw || (selectedStation?.target_capacity_kw ?? 5000);
-    const curve = localPrediction.ghi_forecast_curve;
-    const timestamps = localPrediction.timestamps;
-    const panelArea = selectedStation?.panel_area || 30000;
-    const efficiency = selectedStation?.efficiency || 0.185;
-
-    const sampledPower: PowerChartPoint[] = [];
-    for (let i = 0; i < curve.length; i += 2) {
-      const ghi = curve[i];
-      const pgen = Math.round((panelArea * efficiency * ghi) / 1000);
-      sampledPower.push({
-        t: timestamps[i] || `+${(i + 1) * 10}m`,
-        gen: pgen,
-        target,
-        gap: [pgen, target],
-      });
-    }
-    if (sampledPower.length > 0) {
-      chartPowerData = sampledPower;
-    }
-  }
-
-  return (
-    <ForecastContext.Provider
-      value={{
-        isLive,
-        isLocalModel: !isLive,
-        isLoading,
-        stations,
-        selectedStationId,
-        selectedStation,
-        setSelectedStationId,
-        prediction,
-        localPrediction,
-        modelMeta: TIME_SERIES_MODEL_META,
-        refreshForecast: fetchForecast,
-        chartGhiData,
-        chartPowerData,
-      }}
-    >
-      {children}
-    </ForecastContext.Provider>
+  const value = useMemo<ForecastContextType>(
+    () => ({
+      isLive,
+      isLoading,
+      error,
+      lastUpdated: prediction ? prediction.predicted_at : null,
+      stations,
+      stationsLoaded,
+      selectedStationId,
+      selectedStation,
+      setSelectedStationId,
+      prediction,
+      refreshForecast: fetchForecast,
+      reloadStations,
+      chartGhiData,
+      chartPowerData,
+    }),
+    [
+      isLive, isLoading, error, stations, stationsLoaded, selectedStationId, selectedStation,
+      prediction, fetchForecast, reloadStations, chartGhiData, chartPowerData,
+    ]
   );
+
+  return <ForecastContext.Provider value={value}>{children}</ForecastContext.Provider>;
 }
 
 export function useForecast() {

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import os
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,10 +17,13 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from api.auth.router import router as auth_router
 from api.dashboard.router import router as dashboard_router
+from api.frame_review.router import router as frame_review_router
 from api.inference.router import router as inference_router
 from api.ingestion.router import router as ingestion_router
 from api.jobs.router import router as jobs_router
+from api.label_studio.ground_truth import warm_label_cache
 from api.label_studio.router import router as label_studio_router
+from api.retrain.router import router as retrain_router
 from api.stations.router import router as stations_router
 from api.storage.router import router as storage_router
 from api.users.router import router as users_router
@@ -79,27 +83,11 @@ async def lifespan(_: FastAPI):
         # Fallback if DB not yet connected during local dev tools
         print(f"[Seed Warning] Could not seed default station: {e}")
 
-    # ── Auto Catch-up on Startup (Self-Healing Ingestion in Background) ─────────
-    import asyncio
+    # Gaps in weather and satellite data are healed by the ingestion worker in every 10-minute round.
+    # The API does not run that catch-up itself: its downloads would block request handling after a restart.
 
-    async def run_startup_catchup():
-        try:
-            from api.ingestion.service import IngestionService
-            from api.stations.model import Station
-            from db.database import SessionLocal
-            from sqlalchemy import select
-
-            async with SessionLocal() as db:
-                st_stmt = select(Station).where(Station.is_active == True)
-                stations = (await db.execute(st_stmt)).scalars().all()
-                for st in stations:
-                    w_res = await IngestionService.auto_catchup_weather(db, station_id=st.id)
-                    s_res = await IngestionService.auto_catchup_satellite(db, station_id=st.id, count=12)
-                    print(f"[Auto Catch-up Startup] {st.id} Weather: {w_res.get('status')}, Satellite: {s_res.get('status')}")
-        except Exception as e:
-            print(f"[Auto Catch-up Warning] Could not execute startup catch-up: {e}")
-
-    asyncio.create_task(run_startup_catchup())
+    # Reading every label from Label Studio takes 10-30 s: do it once now, in a thread, so the first page does not wait.
+    threading.Thread(target=warm_label_cache, name="label-cache-warm", daemon=True).start()
 
     yield
 
@@ -139,6 +127,8 @@ app.include_router(label_studio_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(inference_router, prefix="/api")
 app.include_router(ingestion_router, prefix="/api")
+app.include_router(frame_review_router, prefix="/api")
+app.include_router(retrain_router, prefix="/api")
 
 # ── Instrument FastAPI — สร้าง Span & Metrics อัตโนมัติทุก HTTP Request ─────
 FastAPIInstrumentor.instrument_app(

@@ -1,6 +1,3 @@
-from datetime import datetime
-from typing import Optional
-
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from arq.jobs import Job, JobStatus
@@ -14,30 +11,9 @@ class JobService:
         return await create_pool(RedisSettings(
             host=settings.redis_host,
             port=settings.redis_port,
+            conn_timeout=10,
+            retry_on_timeout=True,
         ))
-
-    @staticmethod
-    async def enqueue(function_name: str, job_data: str, queue_name: str = "default") -> str:
-        pool = await JobService.get_pool()
-        job = await pool.enqueue_job(function_name, job_data, _queue_name=queue_name)
-        await pool.close()
-        return job.job_id
-
-    @staticmethod
-    async def enqueue_train(
-        model_type: str = "lstm",
-        epochs: int = 10,
-        batch_size: int = 32,
-        start_time: Optional[datetime] = None,
-    ) -> str:
-        """Enqueue training/retraining job to train_queue."""
-        pool = await JobService.get_pool()
-        kwargs = {"_queue_name": "train_queue"}
-        if start_time is not None:
-            kwargs["_defer_until"] = start_time
-        job = await pool.enqueue_job("train_model", model_type, epochs, batch_size, **kwargs)
-        await pool.close()
-        return job.job_id
 
     @staticmethod
     async def get_status(job_id: str) -> dict:
@@ -56,7 +32,7 @@ class JobService:
 
     @staticmethod
     async def get_all_queues_summary() -> list[dict]:
-        """List summary of queues and key metrics from Redis."""
+        """Number of jobs waiting in each queue, counted in Redis."""
         pool = await JobService.get_pool()
         known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue"]
         summaries = []
@@ -68,8 +44,6 @@ class JobService:
             summaries.append({
                 "queue_name": q_name,
                 "pending": pending or 0,
-                "active": 0,  # Worker updates in real-time
-                "failed": 0,
                 "total_keys": pending or 0,
             })
 

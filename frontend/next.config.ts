@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Self-contained server output => much smaller Docker image
+  output: "standalone",
+  reactStrictMode: true,
+  poweredByHeader: false,
 };
 
 export default nextConfig;

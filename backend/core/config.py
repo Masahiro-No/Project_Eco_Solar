@@ -1,4 +1,6 @@
 import os
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +25,11 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
     enable_retrain: bool = False
-    convlstm_retrain_threshold: int = 50
+    retrain_debounce_seconds: int = 300  # รอรวม label ที่ส่งใกล้กันก่อนเริ่ม retrain
+    convlstm_retrain_threshold: int = 50  # new daytime satellite scans that make one ConvLSTM retrain batch
+    mlflow_tracking_uri: str = "http://mlflow:5000"  # retrain history shown on the admin page
+    # admin account created at startup when a password is configured (ADMIN_PASSWORD in the root .env)
+    admin_email: str = "admin@solardss.io"
+    admin_password: Optional[str] = None
 
 settings = Settings()

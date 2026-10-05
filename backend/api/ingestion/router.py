@@ -1,29 +1,21 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
 from api.ingestion.controller import (
+    get_day_satellite_frames,
     get_ingestion_status,
+    get_latest_satellite_crop,
     get_recent_satellite_frames,
     get_recent_weather,
     trigger_auto_catchup,
-    trigger_ingestion,
 )
 from api.ingestion.schema import (
-    IngestTriggerResponse,
+    DayFramesResponse,
     IngestionStatusResponse,
     SatelliteFrameItem,
     WeatherRecentItem,
 )
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
-
-router.add_api_route(
-    "/trigger",
-    trigger_ingestion,
-    methods=["POST"],
-    response_model=IngestTriggerResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Trigger Real-time Weather & Satellite Ingestion",
-)
 
 router.add_api_route(
     "/catchup",
@@ -60,4 +52,21 @@ router.add_api_route(
     response_model=IngestionStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Get Ingestion Health & Metrics",
+)
+router.add_api_route(
+    "/satellite/{station_id}/latest.png",
+    get_latest_satellite_crop,
+    methods=["GET"],
+    status_code=status.HTTP_200_OK,
+    summary="Newest real satellite crop around a station (PNG)",
+    response_class=Response,
+)
+
+router.add_api_route(
+    "/satellite/{station_id}/day-frames",
+    get_day_satellite_frames,
+    methods=["GET"],
+    response_model=DayFramesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Real satellite frames of a day and the newest ConvLSTM forecast frames",
 )

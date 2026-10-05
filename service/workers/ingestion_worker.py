@@ -10,9 +10,14 @@ Flow:
   5. Backfill/heal any missing weather intervals (auto_catchup_weather).
   6. Query live weather (GHI, DHI, DNI, Clearsky, Temperature, etc.) from Open-Meteo.
   7. Record OpenTelemetry traces & Prometheus metrics.
+  8. Chain real-model inference: enqueue `run_inference` for every station whose input data is
+     fresh (skipped otherwise), then `collect_inference_results` (cron, every minute) saves the
+     finished results into the `predictions` table.
 """
 
+import asyncio
 import io
+import json
 import logging
 import os
 import sys
@@ -37,6 +42,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from sqlalchemy import select
 
+from api.inference.service import InferenceService
 from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
 from api.ingestion.normalizer import WeatherDataNormalizer
 from api.ingestion.service import IngestionService, SATELLITE_BUCKET
@@ -190,6 +196,10 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
                 try:
                     catchup_res = await IngestionService.auto_catchup_weather(db, station_id=st.id)
                     st_info["catchup_records"] = catchup_res.get("records_inserted", 0)
+                    if catchup_res.get("status") == "failed":
+                        logger.warning(f"[{st.id}] Weather catch-up stored nothing: {catchup_res.get('message')}")
+                    if catchup_res.get("records_skipped"):
+                        logger.warning(f"[{st.id}] {catchup_res['records_skipped']} weather slots not stored: no complete Open-Meteo values for them.")
                     if st_info["catchup_records"] > 0:
                         logger.info(f"[{st.id}] Healed {st_info['catchup_records']} missing weather intervals.")
                 except Exception as ce:
@@ -243,6 +253,13 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
 
             await db.commit()
 
+            # D. Chain: run the real forecast model on the data that was just ingested
+            round_started = datetime.fromtimestamp(start_time, tz=timezone.utc)
+            results["inference"] = await _trigger_inference(ctx, db, active_stations, round_started)
+
+            # E. ConvLSTM retrain: start one when a batch of new real daytime scans is complete
+            results["convlstm_retrain"] = await _trigger_convlstm_retrain(ctx, active_stations)
+
         duration = time.time() - start_time
         results["duration_seconds"] = round(duration, 2)
         runs_counter.add(1)
@@ -256,12 +273,90 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
         return results
 
 
-async def ingest_single_station(ctx: dict, station_id: str) -> dict[str, Any]:
-    """On-demand task to immediately trigger ingestion for a single station."""
-    logger.info(f"Manual ingestion triggered for station: {station_id}")
+async def _trigger_inference(ctx: dict, db, stations, round_started: datetime) -> dict[str, Any]:
+    """Enqueue `run_inference` for each station. Stations with stale/insufficient data are skipped."""
+    summary: dict[str, Any] = {"queued": [], "skipped": {}}
+    pool = ctx.get("redis")
+    if pool is None:
+        logger.warning("No Redis connection in ARQ context; inference not triggered.")
+        return summary
+
+    # One forecast per station per 10-minute round, keyed by the time the round started (rounds take
+    # 2-4 minutes, so the time of this call can already be in the next 10-minute slot). The satellite scan
+    # time is not used: NICT's newest scan can stay the same for two rounds (it does every day around the
+    # 02:40 UTC gap), and the weather input is newer by then.
+    slot = round_started.replace(minute=(round_started.minute // 10) * 10, second=0, microsecond=0).strftime("%Y%m%d%H%M")
+    for st in stations:
+        job_id = f"infer-{st.id}-{slot}"  # deterministic: a round that is triggered twice runs once
+        try:
+            queued_id, reason = await InferenceService.enqueue_for_station(st, db, pool, job_id)
+        except Exception as exc:
+            logger.error(f"[{st.id}] Failed to enqueue inference: {exc}")
+            summary["skipped"][st.id] = f"error: {exc}"
+            continue
+        if queued_id:
+            summary["queued"].append(queued_id)
+            logger.info(f"[{st.id}] Inference queued: {queued_id}")
+        else:
+            summary["skipped"][st.id] = reason
+            logger.warning(f"[{st.id}] Inference skipped: {reason}")
+    return summary
+
+
+async def _trigger_convlstm_retrain(ctx: dict, stations) -> dict[str, Any]:
+    """Enqueue the ConvLSTM retrain when enough new real daytime scans are in the frame cache.
+
+    The batch counter is published every round (also while retraining is switched off), so the
+    frame review page can show it.
+    """
+    pool = ctx.get("redis")
+    if pool is None:
+        return {"status": "no_redis"}
+    try:
+        from service.workers import convlstm_batch
+        from service.workers.satellite_preprocessor import connect_minio
+
+        client = connect_minio(read_timeout=60)
+        if client is None:
+            return {"status": "minio_unavailable"}
+        coords = {st.id: (st.latitude, st.longitude) for st in stations}
+        since = convlstm_batch.parse_time(await pool.get(convlstm_batch.LAST_FRAME_KEY))
+        scans = await asyncio.to_thread(convlstm_batch.list_cached_scans, client)
+        status = convlstm_batch.batch_status(scans, coords, since, settings.convlstm_retrain_threshold)
+        published = {k: status[k] for k in ("new_scans", "batch_size", "newest_scan", "since")}
+        published.update(retrain_enabled=settings.enable_retrain, checked_at=datetime.now(timezone.utc).isoformat())
+        await pool.set(convlstm_batch.STATUS_KEY, json.dumps(published))
+        if not settings.enable_retrain:
+            return {"status": "retrain_disabled", "new_scans": status["new_scans"], "batch_size": status["batch_size"]}
+        if not status["due"]:
+            return {"status": "accumulating", "new_scans": status["new_scans"], "batch_size": status["batch_size"]}
+
+        # one job per batch: the key is cleared by the trainer when the run ends
+        if not await pool.set(convlstm_batch.SCHEDULED_KEY, "1", nx=True, ex=3 * 3600):
+            return {"status": "already_scheduled", "new_scans": status["new_scans"]}
+        payload = {"new_scans": status["new_scans"], "batch_size": status["batch_size"], "newest_scan": status["newest_scan"]}
+        try:
+            await pool.enqueue_job("train_convlstm_nowcaster", json.dumps(payload), _queue_name="train_queue")
+        except Exception:
+            await pool.delete(convlstm_batch.SCHEDULED_KEY)
+            raise
+        logger.info(f"ConvLSTM retrain queued: {payload}")
+        return {"status": "queued", **payload}
+    except Exception as exc:
+        logger.warning(f"ConvLSTM retrain trigger failed: {exc}")
+        return {"status": f"error: {exc}"}
+
+
+async def collect_inference_results(ctx: dict) -> dict[str, int]:
+    """ARQ Cron Task — every minute: save finished inference results into the predictions table."""
+    pool = ctx.get("redis")
+    if pool is None:
+        return {"saved": 0, "pending": 0, "dropped": 0}
     async with SessionLocal() as db:
-        res = await IngestionService.trigger_ingest(station_id, db)
-        return {"station_id": station_id, "status": res.status, "message": res.message}
+        stats = await InferenceService.collect_finished_jobs(pool, db)
+    if stats["saved"] or stats["dropped"]:
+        logger.info(f"Inference results collected: {stats}")
+    return stats
 
 
 async def startup(ctx: dict) -> None:
