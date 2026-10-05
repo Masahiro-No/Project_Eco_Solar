@@ -103,6 +103,8 @@ export interface PredictionResultData {
   /** Expected loss of GHI (%) against clear sky per step, from the satellite branch */
   sat_ghi_loss_pct?: (number | null)[] | null;
   sat_ghi_loss_now_pct?: number | null;
+  /** true = the satellite relation was fitted on measured GHI of this station */
+  sat_calibration_verified?: boolean | null;
   /** Target per step: the smaller of P_target and a share of the clear-sky output at that time */
   target_profile_kw?: number[] | null;
   /** Typical error range of the GHI forecast: forecast -/+ the model's RMSE at that lead time */

@@ -49,8 +49,26 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def calibrated_stations() -> Optional[set[str]]:
+    """Stations whose measured GHI the satellite relation was fitted on (model/satellite/ghi_calibration.json).
+
+    None when there is no calibration file. The relation is applied to every station; this only tells the
+    operator where it has been checked against a real sensor.
+    """
+    for d in (os.environ.get("SOLAR_MODEL_ROOT"), "/app/model", "/workspace/model", str(Path(__file__).resolve().parents[3] / "model")):
+        if not d:
+            continue
+        try:
+            with open(Path(d) / "satellite" / "ghi_calibration.json", "r", encoding="utf-8") as f:
+                return set(json.load(f).get("stations") or [])
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:
     level = pred.cloud_trend if pred.cloud_trend in ("low", "medium", "high") else None
+    verified_at = calibrated_stations()
     return PredictionResultData(
         job_id=pred.job_id,
         station_id=pred.station_id,
@@ -64,6 +82,7 @@ def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:
         cloud_coverage_now_pct=pred.cloud_coverage_now_pct,
         sat_ghi_loss_pct=pred.sat_ghi_loss_pct,
         sat_ghi_loss_now_pct=pred.sat_ghi_loss_now_pct,
+        sat_calibration_verified=None if verified_at is None else pred.station_id in verified_at,
         target_profile_kw=pred.target_profile_kw,
         ghi_forecast_lower=pred.ghi_forecast_lower,
         ghi_forecast_upper=pred.ghi_forecast_upper,

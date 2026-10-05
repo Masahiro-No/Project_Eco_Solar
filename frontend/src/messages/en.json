@@ -446,6 +446,10 @@
     "fr_saved_ok": "checked, usable",
     "fr_saved": "{saved} frames saved ({rejected} not usable, {accepted} usable); applies to the next retrain",
     "band_legend": "Typical error range (± RMSE)",
-    "help_band": "The shaded band is the forecast plus and minus the model's error (RMSE) at that lead time, from the daytime part of the test set. About two thirds of the real values fall inside; a single-point sensor under broken cloud can fall outside."
+    "help_band": "The shaded band is the forecast plus and minus the model's error (RMSE) at that lead time, from the daytime part of the test set. About two thirds of the real values fall inside; a single-point sensor under broken cloud can fall outside.",
+    "sat_verified": "Light relation checked against this station's sensor",
+    "sat_unverified": "Light relation not yet checked against this station's sensor",
+    "sat_verified_tip": "The relation between image brightness and light at the ground was fitted on GHI measured at this station",
+    "sat_unverified_tip": "The relation was fitted at another station; no measured GHI of this station confirms it yet, so the satellite result may be further off"
   }
 }

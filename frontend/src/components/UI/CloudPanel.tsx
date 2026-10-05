@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { CloudIcon, CloudOffIcon } from 'lucide-react';
+import { BadgeCheckIcon, CloudIcon, CloudOffIcon, CircleHelpIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
@@ -94,6 +94,21 @@ export function CloudPanel() {
           <p className="mt-2 text-[12.5px] leading-snug text-slate-700">
             {statusKey ? t(statusKey, { minutes: prediction?.satellite_lag_minutes ?? 0 }) : t('no_forecast_title')}
           </p>
+          {usable && prediction?.sat_calibration_verified != null && (
+            <p
+              className={`mt-1.5 inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[12px] font-semibold ${
+                prediction.sat_calibration_verified ? 'bg-ok-soft text-[#166534]' : 'bg-slate-100 text-slate-700'
+              }`}
+              title={t(prediction.sat_calibration_verified ? 'sat_verified_tip' : 'sat_unverified_tip')}
+            >
+              {prediction.sat_calibration_verified ? (
+                <BadgeCheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <CircleHelpIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {t(prediction.sat_calibration_verified ? 'sat_verified' : 'sat_unverified')}
+            </p>
+          )}
 
           {/* Forecast cloud cover per 10-minute step */}
           <div className="mt-auto pt-2">
