@@ -2,16 +2,50 @@
 
 import React from 'react';
 import { SunIcon } from 'lucide-react';
-import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
-import { ghiData } from '@/data/dashboard';
-import { useForecast } from '@/context/ForecastContext';
+import { InfoTip } from './InfoTip';
+import { GhiChartPoint, useForecast } from '@/context/ForecastContext';
+
+// Series colours checked with the dataviz palette validator against the white surface.
+// The blended forecast is the answer (accent); the LSTM line is context (de-emphasised, dashed).
+const BLEND = '#1d4ed8';
+const LSTM = '#64748b';
+
+type TipProps = { active?: boolean; payload?: { payload: GhiChartPoint }[] };
+
+function GhiTooltip({ active, payload, labels }: TipProps & { labels: Record<string, string> }) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-line bg-white px-3 py-2 text-[12.5px] text-slate-700 shadow-lg">
+      <p className="mb-1 font-bold text-ink">{p.t}</p>
+      <p className="flex items-center gap-2">
+        <span className="h-0.5 w-4" style={{ background: BLEND }} />
+        {labels.blend}: <b className="tabular-nums text-ink">{p.blend}</b> W/m²
+      </p>
+      {p.lstm !== null && (
+        <p className="flex items-center gap-2">
+          <span className="w-4 border-t-2 border-dashed" style={{ borderColor: LSTM }} />
+          {labels.lstm}: <b className="tabular-nums text-ink">{p.lstm}</b> W/m²
+        </p>
+      )}
+      <p className="mt-1 text-muted">
+        {labels.weight}: {p.weightPct === null ? '—' : `${p.weightPct}%`} · {labels.cloud}: {p.cloudPct === null ? '—' : `${p.cloudPct}%`}
+      </p>
+    </div>
+  );
+}
 
 export function GhiForecastChart() {
   const t = useTranslations('common');
-  const { chartGhiData, isLive } = useForecast();
-  const data = chartGhiData || ghiData;
+  const { chartGhiData, prediction } = useForecast();
+
+  const hasSatellite = chartGhiData.some((p) => (p.weightPct ?? 0) > 0);
+  const firstWeight = chartGhiData.find((p) => p.weightPct !== null)?.weightPct ?? 0;
+  const yMax = Math.max(200, Math.ceil(Math.max(...chartGhiData.map((p) => Math.max(p.blend, p.lstm ?? 0)), 0) / 200) * 200);
+  const labels = { blend: t('ghi_blend'), lstm: t('ghi_lstm'), weight: t('ghi_weight'), cloud: t('cloud_cover') };
 
   return (
     <Panel
@@ -19,36 +53,43 @@ export function GhiForecastChart() {
       icon={<SunIcon className="h-5 w-5 text-sun" />}
       className="h-full"
       action={
-        <div className="flex items-center gap-3 text-[12px] text-slate-600">
-          {isLive && (
-            <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-600 border border-emerald-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              ONNX Model
-            </span>
-          )}
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5 text-[12px] text-slate-700">
           <span className="flex items-center gap-1.5 whitespace-nowrap">
-            <span className="h-0.5 w-4 bg-brand" /> {t('actual')}
+            <span className="h-0.5 w-5" style={{ background: BLEND }} /> {t('ghi_blend')}
           </span>
           <span className="flex items-center gap-1.5 whitespace-nowrap">
-            <span className="w-4 border-t-2 border-dashed border-brand-mid" /> {t('predicted_lstm')}
+            <span className="w-5 border-t-2 border-dashed" style={{ borderColor: LSTM }} /> {t('ghi_lstm')}
           </span>
+          <InfoTip text={t('help_ghi_blend')} align="right" />
         </div>
       }
     >
-      <p className="shrink-0 text-[11px] font-semibold text-slate-600">{t('ghi_unit')}</p>
-      <div className="min-h-0 flex-1">
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 6, right: 6, left: -20, bottom: -4 }}>
-            <CartesianGrid stroke="#eef2f7" />
-            <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} interval={1} />
-            <YAxis domain={[0, 1000]} ticks={[0, 200, 400, 600, 800, 1000]} tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={{ fontSize: 12.5, borderRadius: 8, borderColor: '#e3e9f2' }} />
-            <Area dataKey="band" stroke="none" fill="#3b82f6" fillOpacity={0.12} name={t('confidence')} isAnimationActive={false} />
-            <Line dataKey="predicted" name={t('predicted_lstm')} stroke="#3b82f6" strokeWidth={1.8} strokeDasharray="6 5" dot={{ r: 2.5, fill: '#fff', strokeWidth: 1.5 }} />
-            <Line dataKey="actual" name={t('actual')} stroke="#1d4ed8" strokeWidth={2} dot={{ r: 3, fill: '#1d4ed8' }} connectNulls={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+      {chartGhiData.length === 0 ? (
+        <p className="flex flex-1 items-center justify-center text-[13px] text-muted">{t('no_forecast_title')}</p>
+      ) : (
+        <>
+          <p className="shrink-0 text-[11.5px] text-slate-600">
+            {t('ghi_unit')} ·{' '}
+            {prediction?.is_night
+              ? t('ghi_note_night')
+              : hasSatellite
+              ? t('ghi_note_blend', { pct: firstWeight })
+              : t('ghi_note_lstm_only')}
+          </p>
+          <div className="min-h-0 flex-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartGhiData} margin={{ top: 8, right: 10, left: -14, bottom: -4 }}>
+                <CartesianGrid stroke="#eef2f7" vertical={false} />
+                <XAxis dataKey="t" tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={{ stroke: '#cbd5e1' }} interval={2} />
+                <YAxis domain={[0, yMax]} tick={{ fontSize: 11, fill: '#475569' }} tickLine={false} axisLine={false} />
+                <Tooltip content={<GhiTooltip labels={labels} />} cursor={{ stroke: '#94a3b8', strokeWidth: 1 }} />
+                <Line dataKey="lstm" stroke={LSTM} strokeWidth={2} strokeDasharray="6 5" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} connectNulls />
+                <Line dataKey="blend" stroke={BLEND} strokeWidth={2} dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      )}
     </Panel>
   );
 }

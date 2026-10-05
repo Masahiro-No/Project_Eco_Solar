@@ -31,7 +31,8 @@ const show = (v: number | null | undefined) => (v === null || v === undefined ? 
 
 interface Row {
   ms: number;
-  pred: number | null;
+  pred: number | null; // ค่าพยากรณ์สุดท้าย (LSTM รวมกับภาพดาวเทียม)
+  lstm: number | null; // LSTM อย่างเดียว
   weather: number | null;
   saved: number | null; // label ที่บันทึกไว้แล้วใน Label Studio
 }
@@ -62,7 +63,7 @@ export default function LabelingPage() {
   const [needLogin, setNeedLogin] = useState(false); // token หาย/หมดอายุ (API ตอบ 401)
 
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, isAdmin } = useAuth();
 
   const handleError = useCallback(
     (e: unknown) => {
@@ -112,6 +113,7 @@ export default function LabelingPage() {
       (data?.points ?? []).map((p) => ({
         ms: new Date(p.timestamp).getTime(),
         pred: r1(p.predicted_ghi),
+        lstm: r1(p.predicted_ghi_lstm),
         weather: r1(p.weather_ghi),
         saved: r1(p.label_ghi),
       })),
@@ -191,6 +193,14 @@ export default function LabelingPage() {
   const tab = (active: boolean) =>
     `rounded-lg px-3.5 py-1.5 text-[13px] font-semibold ${active ? 'bg-brand text-white' : 'bg-white text-slate-700 border border-line hover:bg-canvas'}`;
 
+  if (!isAdmin) {
+    return (
+      <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[14px] text-amber-800">
+        {t('admin_only')}
+      </div>
+    );
+  }
+
   return (
     // text-ink: ไม่งั้นข้อความที่ไม่กำหนดสีจะรับสี foreground ของ dark mode (#ededed) มาแสดงบนพื้นขาว
     <div className="flex min-w-0 flex-col gap-4 pb-4 text-ink">
@@ -249,6 +259,12 @@ export default function LabelingPage() {
                 <>
                   {' '}
                   · {t('lb_mae')}: <b>{data.mae_vs_label}</b> W/m² ({data.matched_label_count})
+                  {data.mae_lstm_vs_label !== null && (
+                    <>
+                      {' '}
+                      · {t('lb_mae_lstm')}: <b>{data.mae_lstm_vs_label}</b> W/m²
+                    </>
+                  )}
                 </>
               )}
             </>
@@ -320,6 +336,7 @@ export default function LabelingPage() {
                     <th className="w-10 px-3 py-2 text-center" aria-label={t('lb_col_confirm')} />
                     <th className="px-3 py-2">{t('lb_col_time')}</th>
                     <th className="px-3 py-2 text-right">{t('lb_col_pred')}</th>
+                    <th className="px-3 py-2 text-right">{t('lb_col_lstm')}</th>
                     <th className="px-3 py-2 text-right">{t('lb_col_weather')}</th>
                     <th className="px-3 py-2 text-right">{t('lb_col_label')}</th>
                   </tr>
@@ -327,7 +344,7 @@ export default function LabelingPage() {
                 <tbody className="divide-y divide-line bg-white">
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-3 py-6 text-center text-muted">
+                      <td colSpan={6} className="px-3 py-6 text-center text-muted">
                         {t('lb_no_points')}
                       </td>
                     </tr>
@@ -345,6 +362,7 @@ export default function LabelingPage() {
                           {r.saved !== null && !on && <span className="ml-2 rounded-full bg-ok-soft px-1.5 py-0.5 text-[10.5px] font-bold text-ok">{t('lb_saved')}</span>}
                         </td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{show(r.pred)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">{show(r.lstm)}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">{show(r.weather)}</td>
                         <td className="px-3 py-1.5 text-right">
                           <input

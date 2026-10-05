@@ -3,11 +3,14 @@
  * ตรงกับ backend: api/label_studio/schema.py และ api/inference/schema.py
  */
 import { API_BASE_URL } from '@/lib/config';
-import { getAuthHeaders } from './api';
+import { apiFetch, getAuthHeaders } from './api';
 
 export interface AlignedForecastPoint {
   timestamp: string; // ISO (UTC) ช่อง 10 นาที
+  /** Final forecast (LSTM blended with the satellite cloud forecast) */
   predicted_ghi: number | null;
+  /** LSTM-only forecast of the same run */
+  predicted_ghi_lstm: number | null;
   weather_ghi: number | null;
   label_ghi: number | null;
 }
@@ -19,6 +22,7 @@ export interface PredictionsByDateResponse {
   label_count: number;
   matched_label_count: number;
   mae_vs_label: number | null;
+  mae_lstm_vs_label: number | null;
   label_error: string | null;
   points: AlignedForecastPoint[];
 }
@@ -70,7 +74,7 @@ async function send<T>(path: string, init: RequestInit, json: boolean): Promise<
   const headers: Record<string, string> = { ...getAuthHeaders() };
   // multipart (FormData): ห้ามใส่ Content-Type เอง ให้ browser ใส่ boundary
   if (json) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${API_BASE_URL}${path}`, { ...init, headers, cache: 'no-store' });
+  const res = await apiFetch(`${API_BASE_URL}${path}`, { ...init, headers, cache: 'no-store' });
   if (!res.ok) {
     let detail = res.statusText;
     try {

@@ -16,6 +16,7 @@ import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
 import { Panel } from '@/components/UI/Panel';
 import { solarApi, StationCreateRequest, NearestStationResponse } from '@/services/api';
+import { useAuth } from '@/context/AuthContext';
 
 // Leaflet touches `window`, so the map is only rendered in the browser
 const LocationPicker = dynamic(() => import('@/components/UI/LocationPicker'), {
@@ -33,12 +34,10 @@ export interface StationDashboardItem {
   efficiency: number;
   target_capacity_kw: number;
   is_active: boolean;
-  pgen: number;
+  /** P_gen of the latest real forecast; null when the station has none */
+  pgen: number | null;
   ptarget: number;
   online: boolean;
-  inverters: string;
-  pr: string;
-  temp: string;
   alert_level?: string;
   created_at?: string;
   updated_at?: string;
@@ -56,6 +55,7 @@ function getStationProvince(name: string): string {
 
 export default function StationsPage() {
   const t = useTranslations('common');
+  const { isAdmin } = useAuth();
   const [stationList, setStationList] = useState<StationDashboardItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'online' | 'offline'>('all');
@@ -96,13 +96,10 @@ export default function StationsPage() {
         efficiency: s.efficiency,
         target_capacity_kw: s.target_capacity_kw,
         is_active: s.is_active,
-        pgen: s.current_pgen_kw ?? (s.is_active ? Math.round(s.target_capacity_kw * 0.82) : 0),
+        pgen: s.current_pgen_kw ?? null,
         ptarget: Math.round(s.target_capacity_kw),
         online: s.is_active,
-        alert_level: s.alert_level || (s.is_active ? 'Normal' : 'Offline'),
-        inverters: `${Math.round(s.target_capacity_kw / 500)}/${Math.round(s.target_capacity_kw / 500)}`,
-        pr: `${(s.efficiency * 100 * 4.6).toFixed(1)}%`,
-        temp: '32.0°C',
+        alert_level: s.alert_level,
         created_at: s.created_at,
         updated_at: s.updated_at,
       }));
@@ -130,7 +127,7 @@ export default function StationsPage() {
 
   const totalCapacity = stationList.reduce((sum, s) => sum + s.target_capacity_kw, 0);
   const totalArea = stationList.reduce((sum, s) => sum + s.panel_area, 0);
-  const totalPgen = stationList.reduce((sum, s) => sum + s.pgen, 0);
+  const totalPgen = stationList.reduce((sum, s) => sum + (s.pgen ?? 0), 0);
   const onlineCount = stationList.filter((s) => s.is_active).length;
 
   // Registered stations shown on the picker map for context
@@ -206,9 +203,6 @@ export default function StationsPage() {
               <h1 className="text-[22px] font-bold leading-tight text-[#0f1f4d]">
                 {t('stations_page_title')}
               </h1>
-              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-600 border border-slate-200">
-                {t('fastapi_route_badge')}
-              </span>
             </div>
             <p className="text-[13.5px] text-slate-600">{t('stations_page_desc')}</p>
           </div>
@@ -223,6 +217,7 @@ export default function StationsPage() {
             <CompassIcon className="h-4 w-4 text-brand" />
             {t('station_btn_nearest')}
           </button>
+          {isAdmin && (
           <button
             onClick={() => setShowCreateModal(true)}
             className="flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:bg-brand/90"
@@ -230,6 +225,7 @@ export default function StationsPage() {
             <PlusIcon className="h-4 w-4" />
             {t('station_btn_add')}
           </button>
+          )}
         </div>
       </div>
 
@@ -295,7 +291,6 @@ export default function StationsPage() {
         action={
           <div className="flex items-center gap-2 text-[12px] text-slate-500">
             {isLoading && <span className="animate-spin text-brand"><RefreshCwIcon className="h-3.5 w-3.5" /></span>}
-            <span>{t('schema_station_response')}</span>
           </div>
         }
       >
@@ -405,7 +400,7 @@ export default function StationsPage() {
                       {s.target_capacity_kw.toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-ink tabular-nums">
-                      {s.is_active ? s.pgen.toLocaleString() : '—'}
+                      {s.is_active && s.pgen !== null ? Math.round(s.pgen).toLocaleString() : '—'}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span
@@ -418,6 +413,7 @@ export default function StationsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
+                      {isAdmin && (
                       <button
                         onClick={() => handleToggleActive(s.id, s.is_active)}
                         className={`rounded px-2.5 py-1 text-[11.5px] font-semibold transition ${
@@ -428,6 +424,7 @@ export default function StationsPage() {
                       >
                         {s.is_active ? t('soft_delete_action') : t('restore_action')}
                       </button>
+                      )}
                     </td>
                   </tr>
                 ))

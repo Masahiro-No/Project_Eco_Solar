@@ -1,4 +1,6 @@
-from fastapi import Depends, Query
+import asyncio
+
+from fastapi import Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
@@ -11,6 +13,7 @@ from api.ingestion.schema import (
     WeatherRecentItem,
 )
 from api.ingestion.service import IngestionService
+from api.storage.service import StorageService
 from db.database import get_db_session
 
 
@@ -66,3 +69,26 @@ async def trigger_auto_catchup(
         "satellite": s_res,
     }
 
+
+
+async def get_latest_satellite_crop(
+    station_id: str,
+    _: User = Depends(get_current_user),
+) -> Response:
+    """ภาพดาวเทียมจริงล่าสุดรอบสถานี (true-colour 64x64 พิกเซล) ที่ inference worker เก็บไว้ใน MinIO."""
+    def read() -> tuple[bytes, str]:
+        resp = StorageService().download_file("satellite-cache", f"{station_id}_latest.png")
+        try:
+            return resp.read(), resp.headers.get("Last-Modified", "")
+        finally:
+            resp.close()
+            resp.release_conn()
+
+    try:
+        data, last_modified = await asyncio.to_thread(read)
+    except Exception:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"No satellite image stored yet for station '{station_id}'.") from None
+    headers = {"Cache-Control": "no-store"}
+    if last_modified:
+        headers["Last-Modified"] = last_modified
+    return Response(content=data, media_type="image/png", headers=headers)

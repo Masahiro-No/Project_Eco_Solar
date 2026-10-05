@@ -50,7 +50,8 @@ class InferenceResultResponse(BaseModel):
 
 class AlignedForecastPoint(BaseModel):
     timestamp: datetime  # ช่อง 10 นาที (UTC)
-    predicted_ghi: Optional[float] = Field(None, description="ค่าที่โมเดลพยากรณ์ไว้สำหรับช่องเวลานี้ (รอบพยากรณ์ล่าสุด)")
+    predicted_ghi: Optional[float] = Field(None, description="ค่าพยากรณ์สุดท้ายของช่องเวลานี้ (LSTM รวมกับภาพดาวเทียม, รอบพยากรณ์ล่าสุด)")
+    predicted_ghi_lstm: Optional[float] = Field(None, description="ค่าพยากรณ์ของ LSTM อย่างเดียวในรอบเดียวกัน")
     weather_ghi: Optional[float] = Field(None, description="GHI ใน weather_history (ค่าประมาณจาก API)")
     label_ghi: Optional[float] = Field(None, description="GHI จริงที่ label ไว้แล้วใน Label Studio")
 
@@ -63,6 +64,7 @@ class PredictionsByDateResponse(BaseModel):
     label_count: int
     matched_label_count: int
     mae_vs_label: Optional[float] = None
+    mae_lstm_vs_label: Optional[float] = Field(None, description="MAE ของ LSTM อย่างเดียว บนช่องเวลาเดียวกับ mae_vs_label")
     label_error: Optional[str] = Field(None, description="ถ้าอ่าน label จาก Label Studio ไม่ได้ จะบอกสาเหตุที่นี่")
     points: list[AlignedForecastPoint]
 

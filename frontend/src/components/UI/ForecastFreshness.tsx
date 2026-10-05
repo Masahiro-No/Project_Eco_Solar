@@ -30,7 +30,7 @@ export function ForecastFreshness() {
   return (
     <div
       role="status"
-      className={`ml-auto flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[12px] font-medium ${
+      className={`ml-auto flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium ${
         stale ? 'border-warn/40 bg-warn-soft text-warn' : 'border-line bg-white text-slate-600'
       }`}
     >

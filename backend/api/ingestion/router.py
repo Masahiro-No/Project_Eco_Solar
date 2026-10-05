@@ -1,7 +1,8 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
 from api.ingestion.controller import (
     get_ingestion_status,
+    get_latest_satellite_crop,
     get_recent_satellite_frames,
     get_recent_weather,
     trigger_auto_catchup,
@@ -60,4 +61,12 @@ router.add_api_route(
     response_model=IngestionStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Get Ingestion Health & Metrics",
+)
+router.add_api_route(
+    "/satellite/{station_id}/latest.png",
+    get_latest_satellite_crop,
+    methods=["GET"],
+    status_code=status.HTTP_200_OK,
+    summary="Newest real satellite crop around a station (PNG)",
+    response_class=Response,
 )

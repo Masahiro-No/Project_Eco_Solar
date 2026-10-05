@@ -17,7 +17,6 @@ import {
   LineChartIcon,
   ShieldCheckIcon,
   SparklesIcon,
-  UserPlusIcon,
   Building2Icon,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
@@ -161,7 +160,7 @@ export default function LoginPage() {
                   AI &amp; Deep Learning DSS
                 </span>
                 <h2 className="mt-3 text-2xl font-bold leading-tight text-white">
-                  Intelligent Solar Power Forecasting &amp; Dispatch
+                  Solar Power Forecasting &amp; Decision Support
                 </h2>
                 <p className="mt-2 text-xs leading-relaxed text-blue-200/90">
                   {t('login_page_subtitle')}
@@ -175,8 +174,8 @@ export default function LoginPage() {
                     <LineChartIcon className="h-4 w-4" />
                   </span>
                   <div>
-                    <p className="font-bold text-white">Bi-LSTM 3-Hour GHI Forecast</p>
-                    <p className="text-[11px] text-blue-200/80">แม่นยำ 95.4% R² ด้วยข้อมูล Pyranometer</p>
+                    <p className="font-bold text-white">{t('login_feat_lstm_title')}</p>
+                    <p className="text-[11px] text-blue-200/80">{t('login_feat_lstm_desc')}</p>
                   </div>
                 </div>
 
@@ -185,8 +184,8 @@ export default function LoginPage() {
                     <CpuIcon className="h-4 w-4" />
                   </span>
                   <div>
-                    <p className="font-bold text-white">Himawari Cloud Motion Tracking</p>
-                    <p className="text-[11px] text-blue-200/80">ConvLSTM ติดตามทิศทางเมฆล่วงหน้า 30-60 นาที</p>
+                    <p className="font-bold text-white">{t('login_feat_cloud_title')}</p>
+                    <p className="text-[11px] text-blue-200/80">{t('login_feat_cloud_desc')}</p>
                   </div>
                 </div>
 
@@ -195,8 +194,8 @@ export default function LoginPage() {
                     <ShieldCheckIcon className="h-4 w-4" />
                   </span>
                   <div>
-                    <p className="font-bold text-white">Automated Spinning Reserve</p>
-                    <p className="text-[11px] text-blue-200/80">วิเคราะห์ส่วนต่างกำลังผลิต (ΔP) และคำสั่งสับจ่ายไฟ</p>
+                    <p className="font-bold text-white">{t('login_feat_dss_title')}</p>
+                    <p className="text-[11px] text-blue-200/80">{t('login_feat_dss_desc')}</p>
                   </div>
                 </div>
               </div>
@@ -204,7 +203,7 @@ export default function LoginPage() {
 
             {/* Footer badge */}
             <div className="mt-8 border-t border-white/10 pt-4 text-[11px] text-blue-300/80 flex items-center justify-between">
-              <span>{t('backend_api_badge')}</span>
+              <span>{t('brand_subtitle')}</span>
               <span className="font-mono text-xs">v0.2.0</span>
             </div>
           </div>
@@ -224,18 +223,6 @@ export default function LoginPage() {
               >
                 <LogInIcon className="h-4 w-4" />
                 <span>Sign In</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  alert(
-                    'ระบบ Sign Up: รองรับการเชื่อมต่อกับ Backend FastAPI POST /api/auth/register'
-                  );
-                }}
-                className="flex items-center gap-2 pb-1 text-sm font-medium text-slate-400 transition-colors hover:text-slate-600"
-              >
-                <UserPlusIcon className="h-4 w-4" />
-                <span>Sign Up</span>
               </button>
             </div>
 

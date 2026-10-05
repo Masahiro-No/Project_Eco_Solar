@@ -414,7 +414,8 @@ class InferenceService:
         เวลาของจุดที่ i ในเส้นพยากรณ์ = data_time (เวลาของข้อมูลล่าสุดที่ป้อนโมเดล) + (i+1)*ระยะห่างของจุด
         แถวที่ไม่มี data_time ใช้ช่องข้อมูลล่าสุดใน weather_history ที่ไม่เกิน predicted_at แทน
         ช่องเวลาเดียวกันที่ถูกพยากรณ์หลายรอบ ใช้รอบที่ origin ใหม่ที่สุด.
-        Returns: {"pred": {slot: ghi}, "weather": {slot: ghi}, "runs": n}
+        pred = เส้นพยากรณ์สุดท้าย (LSTM รวมกับภาพดาวเทียม), pred_lstm = LSTM อย่างเดียวของรอบเดียวกัน
+        Returns: {"pred": {slot: ghi}, "pred_lstm": {slot: ghi}, "weather": {slot: ghi}, "runs": n}
         """
         from api.label_studio.ground_truth import floor_slot, th_day_bounds
 
@@ -437,7 +438,10 @@ class InferenceService:
         w_slots = sorted(weather)
 
         p_res = await db.execute(
-            select(Prediction.predicted_at, Prediction.data_time, Prediction.ghi_forecast_curve, Prediction.forecast_horizon_hours)
+            select(
+                Prediction.predicted_at, Prediction.data_time, Prediction.ghi_forecast_curve,
+                Prediction.forecast_horizon_hours, Prediction.ghi_forecast_lstm_raw,
+            )
             .where(
                 Prediction.station_id == station_id,
                 Prediction.source == MODEL_SOURCE,
@@ -446,10 +450,11 @@ class InferenceService:
             )
             .order_by(Prediction.predicted_at)
         )
-        pred: dict[datetime, tuple[datetime, float]] = {}
+        pred: dict[datetime, tuple[datetime, float, Optional[float]]] = {}
         runs = 0
-        for predicted_at, data_time, curve, horizon_hours in p_res.all():
+        for predicted_at, data_time, curve, horizon_hours, lstm_curve in p_res.all():
             curve = curve or []
+            lstm_curve = lstm_curve or []
             if not curve:
                 continue
             if data_time is not None:
@@ -463,12 +468,14 @@ class InferenceService:
             for k, value in enumerate(curve):
                 slot = origin + gap * (k + 1)
                 if start <= slot < end and (slot not in pred or origin >= pred[slot][0]):
-                    pred[slot] = (origin, float(value))
+                    lstm_value = lstm_curve[k] if k < len(lstm_curve) and lstm_curve[k] is not None else None
+                    pred[slot] = (origin, float(value), None if lstm_value is None else float(lstm_value))
                     used = True
             runs += 1 if used else 0
 
         return {
-            "pred": {s: v for s, (_, v) in pred.items()},
+            "pred": {s: v for s, (_, v, _l) in pred.items()},
+            "pred_lstm": {s: lv for s, (_, _v, lv) in pred.items() if lv is not None},
             "weather": {s: g for s, g in weather.items() if start <= s < end},
             "runs": runs,
         }

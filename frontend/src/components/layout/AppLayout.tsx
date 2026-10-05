@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { TopBar } from '@/components/UI/TopBar';
 import { Sidebar } from '@/components/UI/Sidebar';
@@ -12,7 +12,6 @@ function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { isLoggedIn, isLoading } = useAuth();
-  const [target, setTarget] = useState('');
 
   const isLoginPage = pathname === '/login';
 
@@ -42,7 +41,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <ForecastProvider>
       <div className="flex h-screen w-full flex-col overflow-hidden bg-canvas">
-        <TopBar target={target} onTargetChange={setTarget} />
+        <TopBar />
         <div className="flex min-h-0 flex-1">
           <Sidebar />
           <main className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">{children}</main>

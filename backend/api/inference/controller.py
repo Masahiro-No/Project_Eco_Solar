@@ -93,12 +93,16 @@ async def get_predictions_by_date(
         {
             "timestamp": s,
             "predicted_ghi": agg["pred"].get(s),
+            "predicted_ghi_lstm": agg["pred_lstm"].get(s),
             "weather_ghi": agg["weather"].get(s),
             "label_ghi": labels.get(s),
         }
         for s in slots
     ]
     errs = [abs(agg["pred"][s] - labels[s]) for s in labels if s in agg["pred"]]
+    # same slots for both models, so the two errors can be compared
+    both = [s for s in labels if s in agg["pred"] and s in agg["pred_lstm"]]
+    lstm_errs = [abs(agg["pred_lstm"][s] - labels[s]) for s in both]
     return PredictionsByDateResponse(
         station_id=station_id,
         date=date.isoformat(),
@@ -106,6 +110,7 @@ async def get_predictions_by_date(
         label_count=len(labels),
         matched_label_count=len(errs),
         mae_vs_label=round(sum(errs) / len(errs), 2) if errs else None,
+        mae_lstm_vs_label=round(sum(lstm_errs) / len(lstm_errs), 2) if lstm_errs and len(both) == len(errs) else None,
         label_error=label_error,
         points=points,
     )

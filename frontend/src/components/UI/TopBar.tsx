@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
+import { solarApi } from '@/services/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -18,23 +19,29 @@ import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useForecast } from '@/context/ForecastContext';
 
-type TopBarProps = {
-  target?: string;
-  onTargetChange?: (v: string) => void;
-};
-
-export function TopBar({ target, onTargetChange }: TopBarProps) {
+export function TopBar() {
   const t = useTranslations('common');
   const { locale, setLocale } = useLanguage();
-  const { stations, selectedStationId, setSelectedStationId, selectedStation } = useForecast();
+  const { isAdmin } = useAuth();
+  const { stations, selectedStationId, setSelectedStationId, selectedStation, reloadStations } = useForecast();
 
-  const currentStationValue = selectedStationId || 'ST-001';
-  const currentTargetValue =
-    target !== undefined && target !== ''
-      ? target
-      : selectedStation?.target_capacity_kw
-      ? String(Math.round(selectedStation.target_capacity_kw))
-      : '5000';
+  // P_target is the station's dispatch target. An admin can change it; the next forecast run uses the new value.
+  const stationTarget = selectedStation ? String(Math.round(selectedStation.target_capacity_kw)) : '';
+  const [targetDraft, setTargetDraft] = useState(stationTarget);
+  const [savingTarget, setSavingTarget] = useState(false);
+  useEffect(() => {
+    setTargetDraft(stationTarget);
+  }, [stationTarget, selectedStationId]);
+
+  const saveTarget = async () => {
+    const value = Number(targetDraft);
+    if (!selectedStation || !Number.isFinite(value) || value <= 0 || targetDraft === stationTarget) return;
+    setSavingTarget(true);
+    const updated = await solarApi.patchStation(selectedStation.id, { target_capacity_kw: value });
+    if (updated) await reloadStations();
+    else setTargetDraft(stationTarget);
+    setSavingTarget(false);
+  };
 
   return (
     <header className="flex h-16 w-full shrink-0 items-center border-b border-line bg-white shadow-sm">
@@ -52,15 +59,8 @@ export function TopBar({ target, onTargetChange }: TopBarProps) {
           <span className="relative">
             <MapPinIcon className="pointer-events-none absolute left-3 top-1/2 h-4.5 w-4.5 -translate-y-1/2 text-brand" />
             <select
-              value={currentStationValue}
-              onChange={(e) => {
-                const newId = e.target.value;
-                setSelectedStationId(newId);
-                const found = stations.find((s) => s.id === newId);
-                if (found) {
-                  if (onTargetChange) onTargetChange(String(Math.round(found.target_capacity_kw)));
-                }
-              }}
+              value={selectedStationId}
+              onChange={(e) => setSelectedStationId(e.target.value)}
               className="h-10 w-[270px] appearance-none rounded-lg border border-line bg-white pl-9 pr-8 text-[13.5px] font-medium text-ink focus:border-brand-mid focus:outline-none focus:ring-2 focus:ring-brand-soft truncate"
             >
               {stations.map((s) => (
@@ -77,14 +77,18 @@ export function TopBar({ target, onTargetChange }: TopBarProps) {
           <span className="whitespace-nowrap">{t('ptarget_label')}</span>
           <span className="flex h-10 overflow-hidden rounded-lg border border-line focus-within:border-brand-mid focus-within:ring-2 focus-within:ring-brand-soft">
             <input
-              value={currentTargetValue}
-              onChange={(e) => {
-                const cleanVal = e.target.value.replace(/[^0-9]/g, '');
-                if (onTargetChange) onTargetChange(cleanVal);
+              value={targetDraft}
+              readOnly={!isAdmin}
+              onChange={(e) => setTargetDraft(e.target.value.replace(/[^0-9]/g, ''))}
+              onBlur={saveTarget}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
               }}
+              disabled={savingTarget}
               inputMode="numeric"
               aria-label="P_target in kW"
-              className="w-[110px] px-3 text-[14px] font-medium text-ink focus:outline-none"
+              title={isAdmin ? t('ptarget_edit_hint') : t('ptarget_readonly_hint')}
+              className={`w-[110px] px-3 text-[14px] font-medium text-ink focus:outline-none ${isAdmin ? '' : 'bg-slate-50 text-slate-600'}`}
             />
             <span className="flex items-center border-l border-line bg-brand-soft px-3 text-[13px] font-semibold text-brand">kW</span>
           </span>
@@ -157,13 +161,12 @@ function UserMenu() {
     setIsOpen(false);
   };
 
-  const displayName = isLoggedIn ? user?.name || 'ทวีพร ช่วยบำรุง' : t('guest_user');
-  const displayRole = isLoggedIn ? user?.role || t('menu_free_tier') : t('menu_guest_tier');
+  const displayName = isLoggedIn && user ? user.name : t('guest_user');
+  const displayRole = !isLoggedIn ? t('menu_guest_tier') : user?.role === 'admin' ? t('role_admin') : t('role_operator');
 
   // Generate initials for avatar (e.g. TA or GO)
   const getInitials = (name: string) => {
     if (!isLoggedIn) return 'GU';
-    if (name.includes('ทวีพร')) return 'TA';
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
     return name.slice(0, 2).toUpperCase();

@@ -2,7 +2,7 @@
  * SolarDSS API Client Service
  * Connects frontend with FastAPI Backend & AI Model Inference Engine.
  * Strictly aligned with Backend Pydantic Schemas in api/stations/schema.py
- * Falls back seamlessly to mock data when backend is not running.
+ * No mock data: when the backend has nothing, the functions return null / [] and the UI says so.
  */
 
 import { API_BASE_URL } from '@/lib/config';
@@ -11,6 +11,19 @@ export function getAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   const token = localStorage.getItem('solar_token');
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Fired on window when the backend answers 401: the session is missing or expired. */
+export const UNAUTHORIZED_EVENT = 'solar:unauthorized';
+
+/** fetch() for backend calls: always sends the session token; a 401 tells the AuthProvider to end the session. */
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const headers = { ...getAuthHeaders(), ...(init?.headers as Record<string, string> | undefined) };
+  const res = await fetch(input, { ...init, headers });
+  if (res.status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+  return res;
 }
 
 // ==========================================
@@ -68,49 +81,43 @@ export interface NearestStationResponse {
 // Inference API Schemas
 // ==========================================
 
+export type AlertLevel = 'night' | 'normal' | 'watch' | 'warning' | 'critical';
+export type CloudImpactLevel = 'low' | 'medium' | 'high';
+export type SatelliteStatus = 'ok' | 'shifted' | 'missing' | 'night' | 'low_sun' | 'model_unavailable';
+
 export interface PredictionResultData {
   job_id: string;
   station_id: string;
   station_name: string;
   predicted_at: string;
   forecast_horizon_hours: number;
+  /** Final GHI per 10-minute step: LSTM blended with the satellite cloud forecast */
   ghi_forecast_curve: number[];
+  /** LSTM forecast before blending */
+  ghi_forecast_lstm_raw?: number[] | null;
+  /** Weight of the satellite branch per step (0 = LSTM only) */
+  blend_weight?: number[] | null;
+  /** Forecast cloud cover (%) in the area around the station; null where no satellite forecast covers the step */
+  cloud_coverage_pct?: (number | null)[] | null;
+  cloud_coverage_now_pct?: number | null;
+  cloud_impact_level?: CloudImpactLevel | null;
+  satellite_status?: SatelliteStatus | null;
+  satellite_lag_minutes?: number | null;
+  is_night?: boolean | null;
+  /** P_gen at the first forecast step, from the blended GHI */
   estimated_power_kw: number;
   target_power_kw: number;
+  /** Largest shortfall against the target in the horizon (0 if the target is met) */
   delta_p_kw: number;
+  /** Recommended reserve: shortfall plus the forecast-uncertainty buffer */
+  reserve_kw?: number | null;
   cloud_trend: string;
-  confidence: number;
-  alert_level: string;
+  alert_level: AlertLevel | string;
   recommendation_text: string;
   satellite_image_url?: string;
+  model_version?: string | null;
   /** Timestamp of the newest weather observation the model was fed with */
   data_time?: string | null;
-}
-
-export interface SatelliteFrameItem {
-  frame_no: number;
-  timestamp: string;
-  image_url: string;
-  time_label?: string;
-  source?: string;
-}
-
-export interface SatelliteFramesResponse {
-  status: string;
-  source: string;
-  station_id?: string;
-  total_frames: number;
-  latest_frame: SatelliteFrameItem;
-  frames: SatelliteFrameItem[];
-}
-
-export interface InferenceEnqueueResponse {
-  job_id: string;
-  status: string;
-  station_id: string;
-  target_power_kw: number;
-  model_version: string;
-  enqueued_at: string;
 }
 
 // ==========================================
@@ -141,13 +148,23 @@ export interface StationDashboardResponse {
   current_ghi_w_m2: number;
   forecast_curve_3h: number[];
   cloud_trend: string;
-  confidence: number;
+  cloud_coverage_now_pct?: number | null;
   estimated_power_kw: number;
   delta_p_kw: number;
   alert_level: string;
   recommendation_text: string;
   satellite_image_url?: string;
   last_updated: string;
+}
+
+export interface AlertFeedItem {
+  station_id: string;
+  station_name: string;
+  alert_level: AlertLevel | string;
+  event: string;
+  delta_p_needed_kw: number;
+  recommendation: string;
+  timestamp: string;
 }
 
 // ==========================================
@@ -160,7 +177,7 @@ export const solarApi = {
    */
   async checkHealth(): Promise<boolean> {
     try {
-      const res = await fetch(`${API_BASE_URL}/health`, { method: 'GET', cache: 'no-store' });
+      const res = await apiFetch(`${API_BASE_URL}/health`, { method: 'GET', cache: 'no-store' });
       return res.ok;
     } catch {
       return false;
@@ -176,7 +193,7 @@ export const solarApi = {
    */
   async getStations(limit: number = 100, offset: number = 0, includeArchived: boolean = false): Promise<StationResponse[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations?limit=${limit}&offset=${offset}&include_archived=${includeArchived}`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -198,7 +215,7 @@ export const solarApi = {
    */
   async getArchivedStations(): Promise<StationResponse[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/archived`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/archived`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -217,7 +234,7 @@ export const solarApi = {
    */
   async getStationById(stationId: string): Promise<StationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -236,7 +253,7 @@ export const solarApi = {
    */
   async createStation(payload: StationCreateRequest): Promise<StationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -258,7 +275,7 @@ export const solarApi = {
    */
   async updateStation(stationId: string, payload: StationUpdateRequest): Promise<StationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -280,7 +297,7 @@ export const solarApi = {
    */
   async patchStation(stationId: string, payload: StationPatchRequest): Promise<StationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -302,7 +319,7 @@ export const solarApi = {
    */
   async deleteStation(stationId: string): Promise<StationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });
@@ -320,7 +337,7 @@ export const solarApi = {
    */
   async restoreStation(stationId: string): Promise<StationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/${stationId}/restore`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}/restore`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
       });
@@ -338,7 +355,7 @@ export const solarApi = {
    */
   async findNearestStation(lat: number, lon: number): Promise<NearestStationResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/stations/nearest?lat=${lat}&lon=${lon}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/stations/nearest?lat=${lat}&lon=${lon}`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -361,7 +378,7 @@ export const solarApi = {
    */
   async getDashboardSummary(): Promise<DashboardSummaryResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/dashboard/summary`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/dashboard/summary`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -380,7 +397,7 @@ export const solarApi = {
    */
   async getStationDashboard(stationId: string): Promise<StationDashboardResponse | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/dashboard/station/${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/dashboard/station/${stationId}`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -403,7 +420,7 @@ export const solarApi = {
    */
   async getLatestPrediction(stationId: string = 'ST-001'): Promise<PredictionResultData | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/inference/latest/${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/inference/latest/${stationId}`, {
         method: 'GET',
         headers: getAuthHeaders(),
         cache: 'no-store',
@@ -418,39 +435,13 @@ export const solarApi = {
   },
 
   /**
-   * Enqueue a new 3-hour solar forecast calculation using the ONNX model
-   */
-  async triggerPrediction(
-    stationId: string = 'ST-001',
-    targetKw: number = 5000,
-    modelVersion: string = 'v1.0.0'
-  ): Promise<InferenceEnqueueResponse | null> {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/inference/predict`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          station_id: stationId,
-          target_power_kw: targetKw,
-          model_version: modelVersion,
-        }),
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.info(`[solarApi.triggerPrediction] Could not enqueue prediction for ${stationId}:`, err);
-    }
-    return null;
-  },
-
-  /**
    * Get forecast results by Job ID
    */
   async getResultByJobId(jobId: string): Promise<{ status: string; result?: PredictionResultData } | null> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/inference/result/${jobId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/inference/result/${jobId}`, {
         method: 'GET',
+        headers: getAuthHeaders(),
         cache: 'no-store',
       });
       if (res.ok) {
@@ -467,7 +458,7 @@ export const solarApi = {
    */
   async getPredictionHistory(stationId: string = 'ST-001', limit: number = 20): Promise<PredictionResultData[]> {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/inference/history/${stationId}?limit=${limit}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/inference/history/${stationId}?limit=${limit}`, {
         method: 'GET',
         cache: 'no-store',
       });
@@ -481,119 +472,42 @@ export const solarApi = {
   },
 
   // ----------------------------------------
-  // Satellite Ingestion API
+  // Alerts and satellite image
   // ----------------------------------------
 
-  /**
-   * Fetch real-time Himawari-8/9 satellite frames sequence (10-minute cadence)
-   */
-  async getSatelliteFrames(
-    stationId: string = 'ST-001',
-    count: number = 12
-  ): Promise<SatelliteFrameItem[]> {
-    // 1. Try Next.js internal server route (seamlessly queries NICT / backend)
+  /** Stations whose latest forecast needs attention (watch, warning, critical). */
+  async getAlerts(): Promise<AlertFeedItem[] | null> {
     try {
-      const res = await fetch(`/api/satellite/frames?station_id=${stationId}&count=${count}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/dashboard/alerts`, {
         method: 'GET',
+        headers: getAuthHeaders(),
         cache: 'no-store',
       });
-      if (res.ok) {
-        const data: SatelliteFramesResponse = await res.json();
-        if (data.frames && data.frames.length > 0) {
-          return data.frames;
-        }
-      }
+      if (res.ok) return await res.json();
     } catch (err) {
-      console.info('[solarApi.getSatelliteFrames] Route handler fetch failed, using direct client fallback:', err);
+      console.info('[solarApi.getAlerts] failed:', err);
     }
-
-    // 2. Direct client fallback if API route is unreachable
-    try {
-      const now = new Date();
-      const approx = new Date(now.getTime() - 20 * 60 * 1000);
-      const minuteFloor = Math.floor(approx.getUTCMinutes() / 10) * 10;
-      const latestDt = new Date(Date.UTC(
-        approx.getUTCFullYear(),
-        approx.getUTCMonth(),
-        approx.getUTCDate(),
-        approx.getUTCHours(),
-        minuteFloor,
-        0
-      ));
-
-      const frames: SatelliteFrameItem[] = [];
-      for (let i = count - 1; i >= 0; i--) {
-        const frameDate = new Date(latestDt.getTime() - i * 10 * 60 * 1000);
-        const yyyy = frameDate.getUTCFullYear();
-        const mm = String(frameDate.getUTCMonth() + 1).padStart(2, '0');
-        const dd = String(frameDate.getUTCDate()).padStart(2, '0');
-        const hh = String(frameDate.getUTCHours()).padStart(2, '0');
-        const min = String(frameDate.getUTCMinutes()).padStart(2, '0');
-        const ss = String(frameDate.getUTCSeconds()).padStart(2, '0');
-
-        const thaiDate = new Date(frameDate.getTime() + 7 * 60 * 60 * 1000);
-        const thaiHours = String(thaiDate.getUTCHours()).padStart(2, '0');
-        const thaiMinutes = String(thaiDate.getUTCMinutes()).padStart(2, '0');
-
-        frames.push({
-          frame_no: count - i,
-          timestamp: frameDate.toISOString(),
-          image_url: `https://himawari8-dl.nict.go.jp/himawari8/img/D531106/1d/550/${yyyy}/${mm}/${dd}/${hh}${min}${ss}_0_0.png`,
-          time_label: `${thaiHours}:${thaiMinutes} น.`,
-          source: 'nict_direct',
-        });
-      }
-      return frames;
-    } catch {
-      return [];
-    }
+    return null;
   },
 
-  // ----------------------------------------
-  // ConvLSTM Cloud Movement API
-  // ----------------------------------------
-
   /**
-   * Fetch ConvLSTM cloud movement prediction & 4-class probabilities
+   * Newest real satellite crop around a station, as an object URL (the caller revokes it).
+   * Returns null when the backend has no image yet.
    */
-  async getCloudPrediction(stationId: string = 'ST-001'): Promise<CloudPredictionResponse | null> {
+  async getSatelliteCrop(stationId: string): Promise<{ url: string; lastModified: string | null } | null> {
     try {
-      const res = await fetch(`/api/cloud/prediction?station_id=${stationId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/ingestion/satellite/${stationId}/latest.png`, {
         method: 'GET',
+        headers: getAuthHeaders(),
         cache: 'no-store',
       });
       if (res.ok) {
-        return await res.json();
+        const blob = await res.blob();
+        return { url: URL.createObjectURL(blob), lastModified: res.headers.get('Last-Modified') };
       }
     } catch (err) {
-      console.info('[solarApi.getCloudPrediction] Fetch failed:', err);
+      console.info('[solarApi.getSatelliteCrop] failed:', err);
     }
     return null;
   },
 };
-
-export interface CloudPredictionResponse {
-  status: string;
-  station_id: string;
-  cloud_trend: string;
-  confidence: number;
-  top_class: {
-    id: 'clear' | 'inward' | 'outward' | 'overcast';
-    name: string;
-    th: string;
-    pct: number;
-    tone: 'ok' | 'brand' | 'warn' | 'muted';
-  };
-  classes: {
-    id: 'clear' | 'inward' | 'outward' | 'overcast';
-    name: string;
-    th: string;
-    pct: number;
-    tone: 'ok' | 'brand' | 'warn' | 'muted';
-  }[];
-  description: string;
-  bess_advisory: string;
-  source: string;
-  updated_at: string;
-}
-
