@@ -359,14 +359,6 @@ async def collect_inference_results(ctx: dict) -> dict[str, int]:
     return stats
 
 
-async def ingest_single_station(ctx: dict, station_id: str) -> dict[str, Any]:
-    """On-demand task to immediately trigger ingestion for a single station."""
-    logger.info(f"Manual ingestion triggered for station: {station_id}")
-    async with SessionLocal() as db:
-        res = await IngestionService.trigger_ingest(station_id, db)
-        return {"station_id": station_id, "status": res.status, "message": res.message}
-
-
 async def startup(ctx: dict) -> None:
     logger.info("Ingestion Worker started up successfully. Listening on 'ingest_queue'.")
 

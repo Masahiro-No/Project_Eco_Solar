@@ -51,7 +51,6 @@ class InferenceWorkerSettings:
 
 try:
     from service.workers.ingestion_worker import (
-        ingest_single_station,
         collect_inference_results,
         scheduled_ingest_pipeline,
         shutdown as ingestion_shutdown,
@@ -59,7 +58,6 @@ try:
     )
 except ImportError:
     collect_inference_results = None
-    ingest_single_station = None
     scheduled_ingest_pipeline = None
     ingestion_shutdown = None
     ingestion_startup = None
@@ -69,7 +67,7 @@ if scheduled_ingest_pipeline is not None:
     class IngestionWorkerSettings:
         """Settings สำหรับ Ingestion Worker (ดึงภาพดาวเทียม & สภาพอากาศทุก 10 นาที)"""
         queue_name = "ingest_queue"
-        functions = [scheduled_ingest_pipeline, ingest_single_station, collect_inference_results]
+        functions = [scheduled_ingest_pipeline, collect_inference_results]
         cron_jobs = [
             # Himawari satellite imagery updates every 10 minutes (:08, :18, :28, :38, :48, :58);
             # the pipeline also enqueues the real-model inference for every station afterwards

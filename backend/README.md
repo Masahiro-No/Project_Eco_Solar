@@ -38,7 +38,7 @@ backend/
 | stations | `GET /stations`, `GET /stations/{id}`, `GET /stations/nearest` | ผู้ใช้ที่ล็อกอิน |
 | stations | `POST`, `PUT`, `PATCH`, `DELETE /stations…`, `GET /stations/archived`, `PATCH /stations/{id}/restore` | admin |
 | ingestion | `GET /ingestion/status`, `/weather/{id}/recent`, `/satellite/{id}/frames`, `/satellite/{id}/latest.png`, `/satellite/{id}/day-frames` | ผู้ใช้ที่ล็อกอิน |
-| ingestion | `POST /ingestion/trigger`, `POST /ingestion/catchup` | admin |
+| ingestion | `POST /ingestion/catchup` | admin |
 | inference | `GET /inference/latest/{id}`, `/history/{id}`, `/predictions-by-date`, `/result/{job_id}` | ผู้ใช้ที่ล็อกอิน |
 | inference | `POST /inference/predict` | admin |
 | dashboard | `GET /dashboard/summary`, `/station/{id}`, `/alerts`, `/grafana-links` | ผู้ใช้ที่ล็อกอิน |
@@ -86,7 +86,7 @@ uv run uvicorn main:app --reload
 |---|---|
 | `check_ground_truth_flow.py` | ตรวจ 7 หมวด: ช่องเวลา 10 นาที, การเก็บสภาพอากาศ (ค่าขาด = ไม่มีแถว), ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP ใช้ SQLite ในหน่วยความจำและ Label Studio จำลองเฉพาะในการทดสอบ ไม่แตะข้อมูลจริง |
 | `replay_inference.py` | รันโมเดลจริงกับข้อมูลจริงของสถานีและเวลาที่ระบุ ไม่เขียนฐานข้อมูล |
-| `cleanup_test_data.py` | แสดงรายการข้อมูลทดสอบที่ค้าง (บัญชี, bucket, สถานี `ST-TEST-*`, แถวพยากรณ์เก่า) และลบเมื่อสั่ง `--apply` แล้วพิมพ์ยืนยันเท่านั้น |
+| `cleanup_test_data.py` | แสดงรายการข้อมูลทดสอบที่ค้าง (บัญชี, bucket, สถานี `ST-TEST-*`, แถวพยากรณ์เก่า, แถวเฟรมที่ชี้ไปภาพทั้งดวงและแถวสภาพอากาศที่เก็บซ้ำ) และลบเมื่อสั่ง `--apply` แล้วพิมพ์ยืนยันเท่านั้น |
 | `convert_wind_speed_to_ms.py` | แปลงความเร็วลมของแถว Open-Meteo ที่เก็บก่อน 5 ต.ค. 2026 จาก กม./ชม. เป็น ม./วินาที ครั้งเดียว (รันแล้วกับฐานข้อมูลนี้ และไม่ยอมทำซ้ำ) |
 | `openapi_to_csv.py` | เขียนรายการ endpoint ลง `api_snapshot.csv` และ `api_snapshot.xlsx` |
 | `samples/` | ไฟล์ GHI ตัวอย่าง (csv, xlsx) สำหรับสคริปต์ตรวจ |

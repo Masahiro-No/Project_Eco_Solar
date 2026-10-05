@@ -1,7 +1,6 @@
 import io
 import json
 import os
-import uuid
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -12,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
 from api.ingestion.normalizer import MissingWeatherValue, OPEN_METEO_VARIABLES, WeatherDataNormalizer
-from api.ingestion.schema import IngestTriggerResponse, IngestionStatusResponse, SatelliteFrameItem, WeatherRecentItem
+from api.ingestion.schema import IngestionStatusResponse, SatelliteFrameItem, WeatherRecentItem
 from api.ingestion.solar_calculator import SolarCalculator
 from api.stations.model import Station
 from api.stations.service import StationService
@@ -20,7 +19,6 @@ from api.storage.service import StorageService
 from core.config import settings
 
 NICT_LATEST_JSON = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106/latest.json"
-NICT_BASE_IMG_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106"
 SATELLITE_BUCKET = "satellite-cache"
 # Open-Meteo answers in km/h unless told otherwise; the LSTM was trained on m/s (NSRDB), so every request asks for m/s.
 # Rows stored before 5 Oct 2026 were km/h and were converted once with scripts/convert_wind_speed_to_ms.py.
@@ -80,52 +78,6 @@ class IngestionService:
             return json.loads(resp.read().decode())
 
     @staticmethod
-    def fetch_nict_realtime_image() -> tuple[Optional[bytes], datetime, str]:
-        """Fetch latest Himawari 550x550 PNG image from NICT Japan."""
-        req = urllib.request.Request(NICT_LATEST_JSON, headers={"User-Agent": "SolarForecastDSS/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            latest_info = json.loads(resp.read().decode())
-
-        date_str = latest_info.get("date")
-        dt_utc = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
-        yyyy = dt_utc.strftime("%Y")
-        mm = dt_utc.strftime("%m")
-        dd = dt_utc.strftime("%d")
-        hhmmss = dt_utc.strftime("%H%M%S")
-
-        img_url = f"{NICT_BASE_IMG_URL}/1d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
-        img_req = urllib.request.Request(img_url, headers={"User-Agent": "SolarForecastDSS/1.0"})
-        with urllib.request.urlopen(img_req, timeout=20) as img_resp:
-            content = img_resp.read()
-
-        filename = f"nict_{yyyy}{mm}{dd}_{hhmmss}.png"
-        return content, dt_utc, filename
-
-    @staticmethod
-    def fetch_nict_historical_image(target_dt: datetime) -> tuple[Optional[bytes], datetime, str]:
-        """Fetch a specific Himawari 550x550 PNG image from NICT Japan by UTC timestamp."""
-        minute = (target_dt.minute // 10) * 10
-        dt_utc = target_dt.replace(minute=minute, second=0, microsecond=0)
-        if dt_utc.tzinfo is None:
-            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-
-        yyyy = dt_utc.strftime("%Y")
-        mm = dt_utc.strftime("%m")
-        dd = dt_utc.strftime("%d")
-        hhmmss = dt_utc.strftime("%H%M%S")
-
-        img_url = f"{NICT_BASE_IMG_URL}/1d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
-        img_req = urllib.request.Request(img_url, headers={"User-Agent": "SolarForecastDSS/1.0"})
-        try:
-            with urllib.request.urlopen(img_req, timeout=15) as img_resp:
-                content = img_resp.read()
-            filename = f"nict_{yyyy}{mm}{dd}_{hhmmss}.png"
-            return content, dt_utc, filename
-        except Exception:
-            return None, dt_utc, ""
-
-    @staticmethod
     def fetch_station_b03_crop(
         target_dt: datetime, lat: float, lon: float, crop_size: int = 64
     ) -> tuple[Optional[bytes], datetime, str]:
@@ -173,111 +125,6 @@ class IngestionService:
             return cropped_bytes, dt_utc, filename
         except Exception:
             return None, dt_utc, ""
-
-    @staticmethod
-    def fetch_station_rgb_crop(
-        target_dt: datetime, lat: float, lon: float, crop_size: int = 64
-    ) -> tuple[Optional[bytes], datetime, str]:
-        """Fetch Himawari Level-2d true-color RGB tile and crop 64x64 centered on station."""
-        from PIL import Image
-
-        minute = (target_dt.minute // 10) * 10
-        dt_utc = target_dt.replace(minute=minute, second=0, microsecond=0)
-        if dt_utc.tzinfo is None:
-            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-
-        yyyy = dt_utc.strftime("%Y")
-        mm = dt_utc.strftime("%m")
-        dd = dt_utc.strftime("%d")
-        hhmmss = dt_utc.strftime("%H%M%S")
-
-        img_url = f"{NICT_BASE_IMG_URL}/2d/550/{yyyy}/{mm}/{dd}/{hhmmss}_0_0.png"
-        img_req = urllib.request.Request(img_url, headers={"User-Agent": "SolarForecastDSS/1.0"})
-        try:
-            with urllib.request.urlopen(img_req, timeout=15) as img_resp:
-                raw_bytes = img_resp.read()
-            tile = Image.open(io.BytesIO(raw_bytes))
-            col, row = latlon_to_pixel(lat, lon)
-            half = crop_size // 2
-            crop_img = tile.crop((col - half, row - half, col + half, row + half))
-            buf = io.BytesIO()
-            crop_img.save(buf, format="PNG")
-            return buf.getvalue(), dt_utc, f"rgb_{yyyy}{mm}{dd}_{hhmmss}.png"
-        except Exception:
-            return None, dt_utc, ""
-
-    @staticmethod
-    async def trigger_ingest(station_id: str, db: AsyncSession) -> IngestTriggerResponse:
-        """Trigger an immediate live ingestion of weather + satellite imagery."""
-        station = await StationService.get_station_by_id(db, station_id)
-        job_id = f"ingest-{uuid.uuid4().hex[:12]}"
-
-        # 1. Fetch & normalize Open-Meteo weather
-        try:
-            raw_weather = IngestionService.fetch_open_meteo_live(station.latitude, station.longitude)
-            canonical = WeatherDataNormalizer.normalize_open_meteo(
-                raw_weather, station.id, lat=station.latitude, lon=station.longitude
-            )
-
-            weather_record = WeatherHistory(
-                station_id=station.id,
-                timestamp=canonical.timestamp,
-                ghi=canonical.ghi,
-                dni=canonical.dni,
-                dhi=canonical.dhi,
-                clearsky_ghi=canonical.clearsky_ghi,
-                clearsky_index=canonical.clearsky_index,
-                solar_zenith_angle=canonical.solar_zenith_angle,
-                temperature=canonical.temperature,
-                relative_humidity=canonical.relative_humidity,
-                wind_speed=canonical.wind_speed,
-                cloud_cover=canonical.cloud_cover,
-                surface_pressure=canonical.surface_pressure,
-                source=canonical.source,
-            )
-            db.add(weather_record)
-        except Exception as e:
-            print(f"[Ingest Warning] Failed to fetch weather: {e}")
-
-        # 2. Fetch & store NICT satellite image (Cropped B03 for station)
-        try:
-            img_bytes, dt_frame, filename = IngestionService.fetch_station_b03_crop(
-                datetime.now(timezone.utc), station.latitude, station.longitude
-            )
-            if not img_bytes:
-                img_bytes, dt_frame, filename = IngestionService.fetch_nict_realtime_image()
-            if img_bytes:
-                storage = StorageService()
-                try:
-                    storage.create_bucket(SATELLITE_BUCKET)
-                except Exception:
-                    pass
-
-                object_name = f"{station.id}/{filename}"
-                storage.upload_file(
-                    bucket_name=SATELLITE_BUCKET,
-                    object_name=object_name,
-                    data=io.BytesIO(img_bytes),
-                    length=len(img_bytes),
-                    content_type="image/png",
-                )
-
-                # Save metadata
-                frame_meta = SatelliteFrameMetadata(
-                    station_id=station.id,
-                    frame_timestamp=dt_frame,
-                    image_url=f"/api/storage/download/{SATELLITE_BUCKET}/{object_name}",
-                )
-                db.add(frame_meta)
-        except Exception as e:
-            print(f"[Ingest Warning] Failed to fetch NICT image: {e}")
-
-        await db.commit()
-        return IngestTriggerResponse(
-            job_id=job_id,
-            status="completed",
-            message=f"Successfully ingested live data for station '{station.id}'",
-        )
 
     @staticmethod
     async def get_recent_weather(station_id: str, db: AsyncSession, hours: int = 24) -> list[WeatherRecentItem]:

@@ -7,26 +7,15 @@ from api.ingestion.controller import (
     get_recent_satellite_frames,
     get_recent_weather,
     trigger_auto_catchup,
-    trigger_ingestion,
 )
 from api.ingestion.schema import (
     DayFramesResponse,
-    IngestTriggerResponse,
     IngestionStatusResponse,
     SatelliteFrameItem,
     WeatherRecentItem,
 )
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
-
-router.add_api_route(
-    "/trigger",
-    trigger_ingestion,
-    methods=["POST"],
-    response_model=IngestTriggerResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Trigger Real-time Weather & Satellite Ingestion",
-)
 
 router.add_api_route(
     "/catchup",

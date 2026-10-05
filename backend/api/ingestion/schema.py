@@ -7,12 +7,6 @@ class IngestTriggerRequest(BaseModel):
     station_id: Optional[str] = Field("ST-001", description="Station ID to fetch data for (all if None)")
 
 
-class IngestTriggerResponse(BaseModel):
-    job_id: str
-    status: str = "fetching"
-    message: str
-
-
 class SatelliteFrameItem(BaseModel):
     frame_no: int
     timestamp: datetime

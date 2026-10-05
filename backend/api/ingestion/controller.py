@@ -11,7 +11,6 @@ from api.ingestion.forecast_frames import read_forecast_frames
 from api.ingestion.schema import (
     DayFramesResponse,
     IngestTriggerRequest,
-    IngestTriggerResponse,
     IngestionStatusResponse,
     SatelliteFrameItem,
     WeatherRecentItem,
@@ -22,15 +21,6 @@ from api.storage.service import StorageService
 from db.database import get_db_session
 
 TH_TZ = timezone(timedelta(hours=7))
-
-
-async def trigger_ingestion(
-    payload: IngestTriggerRequest,
-    db: AsyncSession = Depends(get_db_session),
-    _: User = Depends(require_admin),
-) -> IngestTriggerResponse:
-    """สั่งดึงข้อมูลสภาพอากาศแบบ Real-time (Open-Meteo) และภาพดาวเทียม Himawari (NICT) เข้าสู่ระบบทันที"""
-    return await IngestionService.trigger_ingest(station_id=payload.station_id or "ST-001", db=db)
 
 
 async def get_recent_weather(
