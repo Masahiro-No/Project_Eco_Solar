@@ -30,6 +30,7 @@ GET,/api/label-studio/projects/{project_id}/tasks,List Tasks,,label-studio,Yes
 POST,/api/label-studio/projects/{project_id}/tasks,Create Task,,label-studio,Yes
 GET,/api/label-studio/projects/{project_id}/tasks/{task_id}/annotations,List Annotations,,label-studio,Yes
 POST,/api/label-studio/projects/{project_id}/tasks/{task_id}/annotations,Create Annotation,,label-studio,Yes
+GET,/api/label-studio/ground-truth/calibration-status,Has the satellite relation been compared with measured GHI of this station?,สูตรแสงจากภาพดาวเทียมเทียบกับค่าวัดจริงของสถานีนี้แล้วหรือยัง (ผลของงาน check_satellite_calibration ที่รันเองหลังบันทึกค่าวัดจริง).,label-studio,Yes
 POST,/api/label-studio/ground-truth/submit,Submit Ground Truth,ส่ง GHI จริง 1 ค่า -> Label Studio (สร้าง/อัปเดต) -> นัด retrain.,label-studio,Yes
 POST,/api/label-studio/ground-truth/batch-submit,Batch Submit Ground Truth,ส่ง GHI จริงหลายค่า (จากตารางหน้าเว็บ).,label-studio,Yes
 POST,/api/label-studio/ground-truth/upload/preview,Preview Ground Truth File,อ่านหัวตาราง + ตัวอย่างแถวของไฟล์ และเดาคอลัมน์เวลา/GHI ให้ผู้ใช้เลือกยืนยัน.,label-studio,Yes
@@ -58,4 +59,5 @@ GET,/api/frame-review/frames,List Frames,"Real daytime satellite frames of one s
 POST,/api/frame-review/frames,Submit Reviews,Save the reviewer's verdicts. Rejected frames are left out of the next ConvLSTM retrain.,frame-review,Yes
 GET,/api/frame-review/status,Convlstm Status,"Batch counter of new satellite scans, the deployed ConvLSTM and the result of the last retrain.",frame-review,Yes
 GET,/api/retrain/status,"Deployed models, pending retrains and the retrain history of both models","Deployed versions, what is pending and the retrain history of the LSTM and the ConvLSTM.",retrain,Yes
+GET,/api/retrain/runs/{run_id}/curves,Per-epoch learning curves of one retrain run,"Learning curves of one retrain run: training loss, validation metric and learning rate per epoch.",retrain,Yes
 GET,/health,Health Check,ตรวจสอบว่า API server ทำงานปกติ,system,No

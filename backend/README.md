@@ -42,9 +42,9 @@ backend/
 | inference | `GET /inference/latest/{id}`, `/history/{id}`, `/predictions-by-date`, `/result/{job_id}` | ผู้ใช้ที่ล็อกอิน |
 | inference | `POST /inference/predict` | admin |
 | dashboard | `GET /dashboard/summary`, `/station/{id}`, `/alerts`, `/grafana-links` | ผู้ใช้ที่ล็อกอิน |
-| label-studio | `POST /label-studio/ground-truth/submit`, `/batch-submit`, `/upload/preview`, `/upload` และ projects, tasks, annotations | admin |
+| label-studio | `POST /label-studio/ground-truth/submit`, `/batch-submit`, `/upload/preview`, `/upload`, `GET /label-studio/ground-truth/calibration-status` และ projects, tasks, annotations | admin |
 | frame-review | `GET·POST /frame-review/frames`, `GET /frame-review/status` | admin |
-| retrain | `GET /retrain/status` | admin |
+| retrain | `GET /retrain/status`, `GET /retrain/runs/{run_id}/curves` | admin |
 | jobs | `GET /jobs/queues`, `/queues/{name}/jobs`, `GET·DELETE /jobs/{id}`, `POST /jobs/{id}/retry`, `DELETE /jobs/queues/{name}/clear` | admin |
 | storage | `GET·POST /storage/buckets`, `POST /storage/upload`, `GET /storage/download/{bucket}/{object}`, `PUT /storage/buckets/{bucket}/versioning` | admin |
 
@@ -62,6 +62,8 @@ backend/
 - **ภาพเมฆรายวัน** `GET /ingestion/satellite/{id}/day-frames` คืนภาพจริงของวัน และสำหรับวันนี้ ภาพที่ ConvLSTM ทำนายในรอบล่าสุดจาก bucket `satellite-forecast`
 - **สำเนาค่าวัดจริงในหน่วยความจำ** การอ่าน label ทั้งหมดจาก Label Studio ใช้ 10–30 วินาที `api/label_studio/ground_truth.py` จึงเก็บสำเนาไว้ (ใช้ได้ทันที 2 นาที, ใช้พร้อมอ่านใหม่เบื้องหลังได้ถึง 1 ชั่วโมง) ค่าที่บันทึกผ่าน API เข้าสำเนาทันที การบันทึกยังอ่านจาก Label Studio ใหม่ก่อนเขียนเสมอเพื่อไม่ให้เกิด task ซ้ำ
 - **ป้ายสูตรแสงของสถานี** ฟิลด์ `sat_calibration_verified` และ `sat_calibration_check` ในผลพยากรณ์ อ่านจาก `stations` (สถานีที่ใช้ fit) และ `checked` (สถานีที่เทียบแล้ว) ใน `model/satellite/ghi_calibration.json`
+- **ตรวจสูตรแสงเองหลังบันทึกค่าวัดจริง** `store_labels` นัดงาน `check_satellite_calibration` ใน `train_queue` (รอ 60 วินาที รวมการบันทึกที่ติดกันเป็นรอบเดียว ไม่ขึ้นกับ `ENABLE_RETRAIN`) ผลอยู่ในไฟล์ calibration และอ่านได้ที่ `GET /label-studio/ground-truth/calibration-status?station_id=`: `fitted`, `checked`, `insufficient` (พร้อมจำนวนคู่ที่มี), `not_checked`
+- **กราฟการเรียนรู้** `GET /retrain/runs/{run_id}/curves` อ่าน metric `epoch_*` ของรอบนั้นจาก MLflow คืนเป็นค่าต่อ epoch
 
 ## รัน
 
