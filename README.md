@@ -6,42 +6,13 @@
 
 ## 1. ภาพรวมการทำงาน
 
-```mermaid
-flowchart LR
-  subgraph EXT[แหล่งข้อมูลภายนอก]
-    OM[Open-Meteo<br/>สภาพอากาศ 10 นาที]
-    NICT[NICT Himawari<br/>Band 03 ทุก 10 นาที]
-    GT[ไฟล์ GHI ที่วัดจริง<br/>xlsx / csv]
-  end
-  subgraph PRIV[Private zone]
-    ING[ingestion-worker<br/>ทุก 10 นาที]
-    INF[inference-worker<br/>LSTM + ConvLSTM + blend + decision]
-    TRN[trainer-worker<br/>retrain LSTM / ConvLSTM]
-    PG[(PostgreSQL)]
-    S3[(MinIO)]
-    LS[Label Studio]
-    ML[MLflow]
-    OBS[Prometheus / Loki / Tempo / Grafana]
-  end
-  subgraph PUB[Public zone]
-    API[FastAPI :8000]
-    WEB[Next.js :3000]
-  end
-  OM --> ING --> PG
-  NICT --> INF
-  ING -- คิว Redis --> INF --> PG
-  INF <--> S3
-  GT --> WEB --> API --> LS
-  API <--> PG
-  LS --> TRN
-  S3 --> TRN --> S3
-  TRN --> ML
-  API --> WEB
-```
+![การไหลของข้อมูลและโซน Public / Private ของ SolarDSS](diagrams/overview.png)
+
+แผนภาพสร้างจาก [diagrams/overview.py](diagrams/overview.py) เมื่อระบบเปลี่ยน ให้แก้ไฟล์นั้นแล้วรัน `python diagrams/overview.py`
 
 ทุก 10 นาที `ingestion-worker` ดึงสภาพอากาศของทุกสถานีและเติมช่องที่ขาด แล้วสั่ง `inference-worker` ให้พยากรณ์ทีละสถานี:
 
-1. LSTM (ONNX) พยากรณ์ GHI 18 ก้าว จากข้อมูลย้อนหลัง 36 ก้าว (6 ชั่วโมง) 16 ฟีเจอร์
+1. LSTM (ONNX) พยากรณ์ GHI 18 ก้าว จากข้อมูลย้อนหลัง 36 ช่อง ช่องละ 10 นาที (6 ชั่วโมง) 16 ฟีเจอร์ ข้อมูลสภาพอากาศถูกจัดลงช่อง 10 นาทีแบบเดียวกับตอนเทรนก่อนป้อนโมเดล (ข้อ 2.3)
 2. ภาพดาวเทียมจริง 12 เฟรมล่าสุดเข้า ConvLSTM (ONNX) ได้ภาพอีก 18 เฟรม แล้ววัดกรอบรอบสถานีทั้งจากเฟรมจริงล่าสุดและเฟรมที่ทำนาย ได้สัดส่วนเมฆ (ไว้แสดงผล) และความสว่างเฉลี่ย (ไว้คิดแสงที่ลด)
 3. รวมผลสองโมเดลด้วยน้ำหนักที่ลดลงตามระยะเวลาพยากรณ์
 4. คำนวณ P_gen จาก GHI ที่รวมแล้ว เทียบกับเป้า และเลือกระดับการเตือนจากตารางกฎ
@@ -64,6 +35,8 @@ flowchart LR
 ```bash
 docker exec trainer-worker sh -c 'cd /workspace && python -m service.training.calibrate_satellite_ghi --write'
 ```
+
+ค่า a, b ชุดเดียวใช้กับทุกสถานี แต่ fit จากเครื่องวัดของ ST-002 เท่านั้น แผงเมฆบนหน้าเว็บจึงบอกว่าสถานีที่ดูอยู่ "เทียบกับเครื่องวัดของสถานีนี้แล้ว" หรือ "ยังไม่ได้เทียบ" (ฟิลด์ `sat_calibration_verified` อ่านจากรายชื่อ `stations` ในไฟล์ calibration) สถานีที่ยังไม่ได้เทียบ ผลจากภาพดาวเทียมอาจคลาดเคลื่อนมากกว่า
 
 ค่าของฝั่งดาวเทียม (ทั้งสัดส่วนเมฆและความสว่าง) ที่ระยะพยากรณ์ t (นาทีหลังเฟรมจริงล่าสุด) ใช้ค่าที่เห็นจริงในเฟรมล่าสุดเมื่อ t ≤ 30 นาที ใช้ผลของ ConvLSTM เมื่อ t ≥ 90 นาที และผสมเชิงเส้นในระหว่างนั้น
 เหตุผลมาจากการทดสอบย้อนหลังกับภาพจริง (39 ชุดที่กันไว้ วันที่ 4 ต.ค. 2026, ConvLSTM v1.0.1) ความคลาดเคลื่อนเฉลี่ยของ % เมฆในกรอบ:
@@ -113,10 +86,13 @@ w(t)         = 0.9 · exp(−t / 102)        t = นาทีนับจาก�
 | ภาพดาวเทียม | ไม่มีชุด 12 เฟรมที่ครบ แต่มีเฟรมจริงล่าสุด (ทุกวันราว 10:30–12:00 น. หลังรอบที่ Himawari ไม่สแกน) | คงค่าที่เห็นในเฟรมจริงล่าสุดไว้ไม่เกิน 60 นาทีหลังเฟรมนั้น น้ำหนักค่อย ๆ ลดเป็น 0 ไม่ใช้ ConvLSTM |
 | ภาพดาวเทียม | ไม่มีเฟรมจริงใหม่เลย หรือยังไม่มีไฟล์ calibration | น้ำหนักภาพดาวเทียม = 0 ใช้ LSTM อย่างเดียว และหน้าเว็บบอกเหตุผล |
 | ภาพดาวเทียม | NICT ส่งภาพดำทั้งภาพตอนกลางวัน (ยังประมวลผลไม่เสร็จ หรือรอบที่ Himawari ไม่สแกน คือ 02:40 และ 14:40 UTC ทุกวัน) | ถือว่าไม่มีภาพของเวลานั้น ไม่เก็บลง cache และไม่ใช้เทรน |
+| สภาพอากาศ | แถวในฐานข้อมูลมีทั้งเวลา :00 / :10 / … และ :15 / :45 | จัดลงช่อง 10 นาทีที่ใกล้ที่สุด (ครึ่งช่องปัดขึ้น) แถวที่ตกช่องเดียวกันใช้ค่าเฉลี่ย เหมือนตอนเทรน |
 | สภาพอากาศ | ช่องว่างไม่เกิน 20 นาที | linear interpolation |
-| สภาพอากาศ | ช่องว่างยาวกว่านั้น | ดึงย้อนหลังจาก Open-Meteo ในรอบถัดไป ถ้ายังไม่ครบ ไม่พยากรณ์สถานีนั้น |
+| สภาพอากาศ | ช่องว่างยาวกว่านั้น | ดึงย้อนหลังจาก Open-Meteo ในรอบถัดไป ถ้ายังไม่ครบ ไม่พยากรณ์สถานีนั้น และบันทึกเหตุผล (`gap_in_history` หรือ `insufficient_history`) |
 
 ไม่มีการสร้างภาพหรือค่าทดแทน
+
+เดิมระบบป้อน 36 แถวล่าสุดให้ LSTM ตามที่มีในฐานข้อมูล เมื่อแถว :15 และ :45 ปนอยู่ 36 แถวจึงคลุมเพียง 260 นาที ขณะที่โมเดลเทรนกับ 350 นาที (แก้เมื่อ 5 ต.ค. 2026) โค้ด: [backend/api/inference/weather_grid.py](backend/api/inference/weather_grid.py)
 
 ### 2.4 ความยาวข้อมูลย้อนหลังของ LSTM (time steps)
 
@@ -156,15 +132,22 @@ P_gen(t)  = พื้นที่แผง × ประสิทธิภาพ 
 
 ## 3. การ retrain
 
-เปิดปิดด้วย `ENABLE_RETRAIN` ใน `.env` (ค่าเดียวใช้กับทั้งสองโมเดล) ทั้งสองแบบสำรองไฟล์เดิมก่อนแทนที่ และแทนที่เฉพาะเมื่อโมเดลใหม่ไม่แย่กว่าเดิมบนข้อมูลที่กันไว้ตรวจ
+เปิดปิดด้วย `ENABLE_RETRAIN` ใน `.env` (ค่าเดียวใช้กับทั้งสองโมเดล) ทั้งสองแบบสำรองไฟล์เดิมก่อนแทนที่ และแทนที่เฉพาะเมื่อโมเดลใหม่ผ่านเกณฑ์บนข้อมูลที่กันไว้ตรวจ
 
 | | LSTM | ConvLSTM |
 |---|---|---|
 | เริ่มเมื่อ | ผู้ดูแลบันทึกค่า GHI จริง (หน้า Label ค่าจริง) | มีภาพดาวเทียมกลางวันใหม่ครบ 50 เวลาสแกน |
 | ข้อมูล | `weather_history` 45 วันล่าสุด โดยใช้ค่าที่วัดจริงทับในช่องที่มี label | ภาพจริงใน MinIO 5 วันล่าสุด ตัดเป็นชุด 30 เฟรมต่อเนื่อง (12 → 18) |
 | น้ำหนักเริ่มต้น | จากไฟล์ ONNX ที่ใช้งานอยู่ | จากไฟล์ ONNX ที่ใช้งานอยู่ |
-| เกณฑ์ผ่าน | MAE บนชุดตรวจไม่สูงกว่าเดิม | MSE บนชุดตรวจ (ช่วงเวลาล่าสุด) ไม่สูงกว่าเดิม |
-| ผลรอบล่าสุด (5 ต.ค. 2026) | v1.1.0 → v1.1.1, MAE 33.5 → 25.3 W/m² (452 windows) | v1.0.0 → v1.0.1, MSE 0.0117 → 0.0088, SSIM 0.50 → 0.57, ความคลาดเคลื่อนของ % เมฆในกรอบ 20.9 → 19.8 จุด (39 ชุด, 654 เฟรม) |
+| เกณฑ์ผ่าน | เทียบกับ GHI ที่วัดจริงของวันที่กันไว้ (ดูด้านล่าง) | MSE บนชุดตรวจ (ช่วงเวลาล่าสุด) ไม่สูงกว่าเดิม |
+| รอบที่ผ่านล่าสุด (5 ต.ค. 2026) | v1.1.0 → v1.1.1, MAE 33.5 → 25.3 W/m² (452 windows, ผ่านด้วยเกณฑ์เดิม) | v1.0.0 → v1.0.1, MSE 0.0117 → 0.0088, SSIM 0.50 → 0.57, ความคลาดเคลื่อนของ % เมฆในกรอบ 20.9 → 19.8 จุด (39 ชุด, 654 เฟรม) |
+
+**เกณฑ์ผ่านของ LSTM** (เปลี่ยนเมื่อ 5 ต.ค. 2026) เดิมวัด MAE บนชุดตรวจที่เป้าหมายส่วนใหญ่เป็นค่าจาก Open-Meteo โมเดลจึงผ่านได้โดยไม่ได้เข้าใกล้เครื่องวัดจริง ตอนนี้
+
+- ถ้ามี label ตั้งแต่ 2 วันขึ้นไป: กันวันล่าสุดที่มี label ไว้ทั้งวัน ไม่ใช้เทรน โมเดลใหม่ต้อง (1) ลด MAE เทียบกับ GHI ที่วัดจริงของวันนั้น และ (2) MAE บนชุดตรวจที่ไม่มี label แย่ลงได้ไม่เกิน 5%
+- ถ้ามี label วันเดียว: ใช้เกณฑ์เดิม คือ MAE บนชุดตรวจไม่สูงกว่าเดิม
+
+ผลบันทึกว่าใช้เกณฑ์ใด (`gate`), วันที่กันไว้ (`holdout_day`) และ MAE ก่อนหลัง รอบที่ลองด้วยเกณฑ์ใหม่บ่ายวันที่ 5 ต.ค. (กันวันที่ 5 ต.ค. ไว้ 315 จุด) MAE เทียบกับค่าวัดจริงเดิม 56.8 W/m² และไม่ดีขึ้นหลัง fine-tune ระบบจึงไม่แทนที่โมเดล (`no_improvement_on_measured_ghi`)
 
 **คนอยู่ในวงจรทั้งสองโมเดล:** LSTM ใช้ค่า GHI ที่วัดจริงซึ่งผู้ดูแลอัปโหลดหรือกรอกที่หน้า *Label ค่าจริง* ส่วน ConvLSTM เรียนจากการทำนายภาพถัดไป คำตอบจึงเป็นภาพจริงเอง สิ่งที่คนเพิ่มได้คือการตรวจว่าภาพไหนใช้ไม่ได้ ที่หน้า *ตรวจภาพดาวเทียม* ผู้ดูแลเห็นภาพจริงรายวันพร้อมข้อสังเกตอัตโนมัติ (ภาพดำ, ภาพขาดบางส่วน, สว่างจ้า, ความสว่างกระโดด) แล้วกดว่าใช้ได้หรือใช้ไม่ได้ ภาพที่ถูกปฏิเสธจะไม่เข้าชุดเทรนรอบถัดไป หน้าเดียวกันแสดงจำนวนภาพใหม่ที่สะสม (x/50) รุ่นโมเดล และผล retrain รอบล่าสุด ค่า GHI ที่วัดจริงยังใช้ปรับสูตรแปลงภาพเป็นแสงด้วย (ข้อ 2.1)
 
@@ -180,7 +163,7 @@ docker exec trainer-worker sh -c 'cd /workspace && python -m service.training.re
 | โซน | ใครเข้าได้ | ประกอบด้วย |
 |---|---|---|
 | Public | ผู้ใช้ที่ล็อกอิน role `operator` | เว็บ :3000 (แดชบอร์ด พยากรณ์ สนับสนุนการตัดสินใจ แจ้งเตือน สถานี คู่มือ) และ API อ่านข้อมูล :8000 |
-| Private (ผู้ดูแล) | role `admin` | หน้า Label ค่าจริง, หน้าตรวจภาพดาวเทียม, แก้ไขสถานีและเป้ากำลังผลิต, API สั่งงาน (jobs, storage, ingestion trigger) |
+| Private (ผู้ดูแล) | role `admin` | หน้า Label ค่าจริง, หน้าตรวจภาพดาวเทียม, แก้ไขสถานีและเป้ากำลังผลิต, API ของผู้ดูแล (ดูและจัดการคิวงาน, storage, สั่ง ingestion, สั่งพยากรณ์) |
 | Private (นักพัฒนา) | เฉพาะเครื่อง server (`127.0.0.1`) | PostgreSQL 5432, Redis 6379, MinIO 9000/9001, Label Studio 8080, MLflow 5000, Grafana 3002, Prometheus 9090, Loki 3100, Tempo 3200 |
 
 API ตรวจ token และ role ที่ทุก endpoint ของข้อมูลระบบ ผู้ที่ไม่ล็อกอินได้ 401 และ operator ที่เรียก endpoint ของผู้ดูแลได้ 403
@@ -213,28 +196,54 @@ docker compose up -d
 
 | ส่วนที่แก้ | คำสั่ง |
 |---|---|
-| `backend/` | `docker compose restart api` |
-| `service/workers/`, `service/training/` | `docker compose restart ingestion-worker inference-worker trainer-worker` |
+| `backend/` | `docker compose restart api ingestion-worker` (ingestion-worker ใช้โค้ด backend ตอนสร้างข้อมูลป้อนโมเดลและบันทึกผล) |
+| `service/workers/`, `service/training/` | `docker compose restart ingestion-worker inference-worker trainer-worker` (อย่า restart `trainer-worker` ระหว่างที่กำลังเทรน) |
 | `frontend/` | `docker compose up -d --build --no-deps frontend` |
 | ค่าใน `compose.yml` หรือ `.env` | `docker compose up -d <service>` |
 
 ### ตรวจระบบ
 
+ชุดทดสอบของ worker (42 รายการ):
+
 ```bash
 docker exec trainer-worker sh -c 'cd /workspace && pip install -q pytest && python -m pytest service/tests -q'
 ```
+
+ตรวจฝั่ง backend 6 หมวด (ช่องเวลา 10 นาที, ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP) ใช้ฐานข้อมูลในหน่วยความจำ ไม่แตะข้อมูลจริง:
+
+```bash
+docker exec fastapi sh -c 'cd /app && uv run --with aiosqlite --with httpx python scripts/check_ground_truth_flow.py'
+```
+
+รันโมเดลจริงกับข้อมูลจริงของเวลาที่ระบุ โดยไม่เขียนฐานข้อมูล:
 
 ```bash
 docker exec fastapi sh -c 'cd /app && PYTHONPATH=/app uv run python scripts/replay_inference.py ST-002 2026-10-04T07:00:00+00:00'
 ```
 
-คำสั่งที่สองรันโมเดลจริงกับข้อมูลจริงของเวลาที่ระบุ โดยไม่เขียนฐานข้อมูล
 Grafana มี dashboard `SolarDSS Operations` (รอบ ingestion, รอบพยากรณ์ต่อสถานี, สถานะภาพดาวเทียม, รุ่นโมเดล, log ของ worker)
+
+### ลบข้อมูลทดสอบ
+
+บัญชี, bucket, สถานี และแถวพยากรณ์ที่ค้างจากการทดสอบ ลบด้วยสคริปต์ที่แสดงรายการก่อนเสมอ คำสั่งแรกไม่ลบอะไร:
+
+```bash
+docker exec fastapi sh -c 'cd /app && uv run python scripts/cleanup_test_data.py'
+```
+
+เมื่อรายการถูกต้อง รันคำสั่งที่สองแล้วพิมพ์ `DELETE` เพื่อยืนยัน (ย้อนกลับไม่ได้):
+
+```bash
+docker exec -it fastapi sh -c 'cd /app && uv run python scripts/cleanup_test_data.py --apply'
+```
+
+เลือกหมวดได้ด้วย `--only users,buckets,predictions,stations` บัญชีที่ไม่ตรงรูปแบบบัญชีทดสอบจะไม่ถูกลบเว้นแต่ระบุ `--delete-user EMAIL` และกันบัญชีไว้ได้ด้วย `--keep-user EMAIL`
 
 ## 6. โครงสร้างโปรเจกต์
 
 ```text
-backend/            FastAPI: auth (role), stations, ingestion, inference, dashboard, label_studio, frame_review, jobs
+backend/            FastAPI: auth (role), users, stations, ingestion, inference, dashboard, label_studio, frame_review, jobs, storage
+backend/scripts/    check_ground_truth_flow, replay_inference, cleanup_test_data, openapi_to_csv
 service/workers/    ingestion_worker, inference_worker, train_worker
                     cloud_coverage, ghi_blend, decision, solar_geometry, satellite_preprocessor, convlstm_batch
 service/training/   train (LSTM + ablation), retrain_timeseries, retrain_convlstm, calibrate_satellite_ghi, backtest_cloud, features
@@ -242,9 +251,12 @@ service/tests/      ชุดทดสอบของ pipeline พยากร�
 frontend/           Next.js 15 (ไทย / อังกฤษ)
 model/              โมเดลที่ใช้งานอยู่: time-series/ (LSTM), convlstm/ และ satellite/ (ค่า calibration)
 observability/      Prometheus, Loki, Tempo, OTel collector, Grafana provisioning
+diagrams/           overview.py และ overview.png (แผนภาพในข้อ 1)
 compose.yml         ทุก service
 PLAN.md             แผนงาน ข้อกำหนด และสถานะ
 ```
+
+แต่ละส่วนมี README ของตัวเอง: [backend](backend/README.md), [service](service/README.md), [frontend](frontend/README.md)
 
 ## 7. ข้อจำกัดที่รู้
 
@@ -255,3 +267,5 @@ PLAN.md             แผนงาน ข้อกำหนด และสถ�
 - AOI 5×5 พิกเซลทำให้สัดส่วนเมฆเปลี่ยนทีละ 4%
 - Himawari ไม่สแกนเวลา 09:40 น. ของทุกวัน ราว 10:30–12:00 น. จึงไม่มีชุด 12 เฟรมต่อเนื่อง ช่วงนั้นฝั่งดาวเทียมใช้ค่าจากเฟรมจริงล่าสุดได้ไม่เกิน 1 ชั่วโมงข้างหน้า ที่เหลือเป็น LSTM
 - ชุดตรวจของ retrain ConvLSTM รอบแรกมาจากบ่ายวันเดียว (4 ต.ค.) ตัวเลขจึงยังแกว่ง ควรดูซ้ำเมื่อสะสมภาพได้หลายวัน
+- เกณฑ์ retrain ของ LSTM ที่เทียบกับค่าวัดจริงใช้ได้เมื่อมี label ตั้งแต่ 2 วันขึ้นไป และวันที่กันไว้มีวันเดียว ผลจึงขึ้นกับสภาพอากาศของวันนั้น โมเดลที่ใช้งานอยู่ (v1.1.1) ผ่านด้วยเกณฑ์เดิมก่อนเปลี่ยนเกณฑ์
+- ค่ากันความคลาดเคลื่อนในกำลังสำรองใช้ RMSE ของทุกช่วงเวลา ส่วนแถบความไม่แน่นอนบนกราฟใช้ RMSE เฉพาะกลางวัน สองค่านี้จึงไม่เท่ากัน

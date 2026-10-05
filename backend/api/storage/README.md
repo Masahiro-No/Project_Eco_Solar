@@ -3,6 +3,10 @@
 ## Overview
 มอดูล **Storage** ทำหน้าที่เชื่อมต่อกับ **MinIO Object Storage** (S3-Compatible) เพื่อจัดการ Buckets, การอัปโหลดไฟล์ และดาวน์โหลดไฟล์มัลติมีเดียต่างๆ ของระบบ AI Ecosystem
 
+ทุก endpoint ของมอดูลนี้ต้องเป็น role `admin` ภาพดาวเทียมที่หน้าเว็บแสดงให้ operator มาจาก `GET /api/ingestion/satellite/{station_id}/latest.png` ไม่ใช่จากมอดูลนี้
+
+Bucket ที่ระบบใช้: `satellite-cache` (ภาพดาวเทียมของแต่ละสถานี) และ `models` (ไฟล์โมเดลที่ใช้งานอยู่)
+
 ## Library Used
 - **`minio`**: Official Python SDK สำหรับจัดการ MinIO Server (Bucket Creation, Object Put/Get, Bucket Versioning)
 

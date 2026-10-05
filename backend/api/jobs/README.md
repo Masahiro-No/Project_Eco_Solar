@@ -1,36 +1,32 @@
-# Jobs Queue Module (`backend/api/jobs`)
+# Jobs Module (`backend/api/jobs`)
 
-## Overview
-มอดูล **Jobs** ทำหน้าที่เป็น Job Producer ในระบบ Asynchronous Job Processing โดยการรับคำร้องขอสร้างงานเบื้องหลังส่งต่อไปยัง **Redis Queue** เพื่อให้ Worker Service ดึงงานไปประมวลผลต่อ
+ให้ผู้ดูแลดูและจัดการคิวงานของ worker ใน Redis (ARQ) ทุกเส้นทางต้องเป็น role `admin`
 
-## Library & Infrastructure Used
-- **`arq`**: Redis-based Asynchronous Job Queue Library สำหรับ Python
-- **Redis**: ทำหน้าที่เป็น Message Broker สำหรับเก็บ Job Queue และสถานะของ Job
+โมดูลนี้ไม่ได้ใช้สั่งงานใหม่ งานในระบบเกิดจากสามทาง:
 
-## Processing Flow
-```text
-1. Clientส่ง Request ไปยัง Backend
-   └─ POST /api/jobs/enqueue (ระบุ function_name และ arguments)
-
-2. Backend enqueues job ลง Redis
-   └─ `arq` connection pool ส่ง Job ID เข้า Redis Queue
-
-3. Worker Process ใน service/ คอยดึงงาน (Poll) จาก Redis
-   └─ ดึง Job ไปประมวลผล Asynchronously
-
-4. Client สามารถติดตามสถานะของ Job ได้
-   └─ GET /api/jobs/{job_id} เพื่อดูสถานะและผลลัพธ์
-```
+| งาน | คิว | ใครนัด |
+| --- | --- | --- |
+| รอบดึงข้อมูล และเก็บผลพยากรณ์ | `ingest_queue` | ตารางเวลาของ ingestion-worker เอง (ทุก 10 นาที และทุกนาที) |
+| `run_inference` | `inference_queue` | ingestion-worker หลังดึงข้อมูลแต่ละรอบ หรือ `POST /api/inference/predict` |
+| `train_timeseries_lstm` | `train_queue` | โมดูล label_studio หลังบันทึกค่า GHI จริง |
+| `train_convlstm_nowcaster` | `train_queue` | ingestion-worker เมื่อภาพใหม่ครบ 50 เวลาสแกน |
 
 ## API Endpoints
 
-| Method | Endpoint | Description | Request / Response |
-| --- | --- | --- | --- |
-| `POST` | `/api/jobs/enqueue` | ส่งงานเข้าสู่ Redis Job Queue | Body: `{ "function_name": "...", "args": [...] }` |
-| `GET` | `/api/jobs/{job_id}` | ตรวจสอบสถานะและผลลัพธ์ของ Job ตาม Job ID | Return Job Status & Result |
+| Method | Endpoint | ใช้ทำอะไร |
+| --- | --- | --- |
+| `GET` | `/api/jobs/queues` | จำนวนงานที่รอในแต่ละคิว |
+| `GET` | `/api/jobs/queues/{name}/jobs` | รายการ job id ที่รอในคิว |
+| `DELETE` | `/api/jobs/queues/{name}/clear` | ล้างงานที่รอทั้งหมดในคิว |
+| `GET` | `/api/jobs/{job_id}` | สถานะและผลของงาน |
+| `POST` | `/api/jobs/{job_id}/retry` | ส่งงานเดิมเข้าคิวอีกครั้ง |
+| `DELETE` | `/api/jobs/{job_id}` | เอางานออกจากคิว |
 
-## File Structure
-- `router.py`: กำหนด HTTP Endpoints สำหรับจัดการ Jobs (`/api/jobs/...`)
-- `controller.py`: รับ Request payload และส่งต่อคำสั่ง enqueue/get_job ให้กับ Service
-- `service.py`: จัดการความเชื่อมโยงกับ Redis ผ่าน `arq.create_pool` เพื่อส่งงานและอ่านสถานะ Job
-- `schema.py`: Pydantic Schemas สำหรับ Enqueue Job Request และ Job Status Response
+`GET /api/jobs/queues` นับเฉพาะงานที่รอ ช่อง `active` และ `failed` ยังเป็น 0 เสมอ เพราะยังไม่ได้อ่านค่าจาก worker
+
+## ไฟล์
+
+- `router.py` เส้นทาง
+- `controller.py` ตรวจสิทธิ์และจัดรูป response
+- `service.py` ต่อ Redis ด้วย `arq.create_pool` (timeout 10 วินาที) โมดูลอื่นใช้ `JobService.get_pool()` เมื่อต้องนัดงาน
+- `schema.py` Pydantic models
