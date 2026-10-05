@@ -4,7 +4,7 @@ import asyncio
 from datetime import date as date_type
 from typing import Optional
 
-from fastapi import Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,13 +12,17 @@ from api.auth.model import User
 from api.auth.service import require_admin
 from api.label_studio import file_import
 from api.label_studio.ground_truth import (
+    CALIBRATION_RUNNING_KEY,
+    CALIBRATION_SCHEDULED_KEY,
     GroundTruthStore,
     parse_label_timestamp,
+    schedule_calibration_check,
     schedule_retrain,
     validate_value,
 )
 from api.label_studio.schema import (
     BatchSubmitGroundTruthRequest,
+    CalibrationStatusResponse,
     BatchSubmitGroundTruthResponse,
     SubmitGroundTruthRequest,
     SubmitGroundTruthResponse,
@@ -59,6 +63,7 @@ async def store_labels(station_id: str, raw_items: list[dict], source: str):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Label Studio error: {e}") from None
 
     enqueued, retrain_status = await schedule_retrain(station_id, summary.changed)
+    await schedule_calibration_check(summary.changed)  # สูตรแสงของสถานีนี้เทียบกับค่าวัดจริงแล้วหรือยัง
     return summary, rejected + summary.rejected, enqueued, retrain_status
 
 
@@ -161,3 +166,39 @@ async def upload_ground_truth_file(
         duplicates_collapsed=parsed.duplicates_collapsed,
         clamped_negative=parsed.clamped_negative,
     )
+
+
+async def get_calibration_status(
+    station_id: str = Query(...),
+    db: AsyncSession = Depends(get_db_session),
+    _: User = Depends(require_admin),
+) -> CalibrationStatusResponse:
+    """สูตรแสงจากภาพดาวเทียมเทียบกับค่าวัดจริงของสถานีนี้แล้วหรือยัง (ผลของงาน check_satellite_calibration ที่รันเองหลังบันทึกค่าวัดจริง)."""
+    from api.inference.service import read_calibration_file
+    from api.jobs.service import JobService
+
+    await _require_station(db, station_id)
+    pending = False
+    try:
+        pool = await JobService.get_pool()
+        try:
+            pending = bool(await pool.exists(CALIBRATION_SCHEDULED_KEY)) or bool(await pool.exists(CALIBRATION_RUNNING_KEY))
+        finally:
+            await pool.close()
+    except Exception:  # noqa: BLE001  Redis ล่ม: ยังบอกผลล่าสุดในไฟล์ได้
+        pass
+
+    data = read_calibration_file()
+    if data is None:
+        return CalibrationStatusResponse(station_id=station_id, state="no_calibration", pending=pending)
+    common = {"station_id": station_id, "min_pairs": int(data.get("min_pairs") or 30), "checked_at": data.get("checked_at"), "pending": pending}
+    checked = (data.get("checked") or {}).get(station_id)
+    if station_id in (data.get("stations") or []):
+        return CalibrationStatusResponse(state="fitted", pairs=(checked or {}).get("pairs", data.get("pairs")), mae=(checked or {}).get("mae", data.get("mae_leave_one_day_out")), **common)
+    if checked:
+        return CalibrationStatusResponse(state="checked", pairs=checked.get("pairs"), mae=checked.get("mae"), **common)
+    short = (data.get("insufficient") or {}).get(station_id)
+    if short is not None:
+        return CalibrationStatusResponse(state="insufficient", pairs=int(short.get("pairs") or 0), **common)
+    return CalibrationStatusResponse(state="not_checked", **common)
+

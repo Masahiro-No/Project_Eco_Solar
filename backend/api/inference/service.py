@@ -50,27 +50,34 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def read_calibration_file() -> Optional[dict[str, Any]]:
+    """model/satellite/ghi_calibration.json as written by the trainer, or None when there is none."""
+    override = os.environ.get("SOLAR_MODEL_ROOT")  # when set, it is the only place looked at
+    roots = [override] if override else ["/app/model", "/workspace/model", str(Path(__file__).resolve().parents[3] / "model")]
+    for d in roots:
+        try:
+            with open(Path(d) / "satellite" / "ghi_calibration.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def calibration_checks() -> Optional[dict[str, dict[str, Any]]]:
-    """Stations where the satellite relation was compared with measured GHI (model/satellite/ghi_calibration.json).
+    """Stations where the satellite relation was compared with measured GHI.
 
     {station: {"fitted": bool, "pairs": int | None, "mae": float | None}}: fitted = the line was fitted on this
-    station; otherwise the line of another station was checked here (`calibrate_satellite_ghi --check`).
+    station; otherwise the line of another station was checked here (trainer job check_satellite_calibration).
     None when there is no calibration file. The relation is applied to every station; this only tells the
     operator where it has been compared with a real sensor.
     """
-    for d in (os.environ.get("SOLAR_MODEL_ROOT"), "/app/model", "/workspace/model", str(Path(__file__).resolve().parents[3] / "model")):
-        if not d:
-            continue
-        try:
-            with open(Path(d) / "satellite" / "ghi_calibration.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            continue
-        checks = {s: {"fitted": True, "pairs": None, "mae": None} for s in data.get("stations") or []}
-        for station, c in (data.get("checked") or {}).items():
-            checks[station] = {"fitted": bool(c.get("fitted")) or station in checks, "pairs": c.get("pairs"), "mae": c.get("mae")}
-        return checks
-    return None
+    data = read_calibration_file()
+    if data is None:
+        return None
+    checks = {s: {"fitted": True, "pairs": None, "mae": None} for s in data.get("stations") or []}
+    for station, c in (data.get("checked") or {}).items():
+        checks[station] = {"fitted": bool(c.get("fitted")) or station in checks, "pairs": c.get("pairs"), "mae": c.get("mae")}
+    return checks
 
 
 def _to_schema(pred: Prediction, station_name: str) -> PredictionResultData:

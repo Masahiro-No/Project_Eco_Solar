@@ -2,6 +2,7 @@ from fastapi import APIRouter, status
 
 from api.label_studio.ground_truth_controller import (
     batch_submit_ground_truth,
+    get_calibration_status,
     preview_ground_truth_file,
     submit_ground_truth,
     upload_ground_truth_file,
@@ -17,6 +18,7 @@ from api.label_studio.controller import (
 from api.label_studio.schema import (
     AnnotationResponse,
     BatchSubmitGroundTruthResponse,
+    CalibrationStatusResponse,
     ProjectResponse,
     SubmitGroundTruthResponse,
     TaskResponse,
@@ -31,6 +33,8 @@ router.add_api_route("/projects/{project_id}/tasks", list_tasks, methods=["GET"]
 router.add_api_route("/projects/{project_id}/tasks", create_task, methods=["POST"], response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 router.add_api_route("/projects/{project_id}/tasks/{task_id}/annotations", list_annotations, methods=["GET"], response_model=list[AnnotationResponse], status_code=status.HTTP_200_OK)
 router.add_api_route("/projects/{project_id}/tasks/{task_id}/annotations", create_annotation, methods=["POST"], response_model=AnnotationResponse, status_code=status.HTTP_201_CREATED)
+router.add_api_route("/ground-truth/calibration-status", get_calibration_status, methods=["GET"], response_model=CalibrationStatusResponse, status_code=status.HTTP_200_OK,
+                     summary="Has the satellite relation been compared with measured GHI of this station?")
 router.add_api_route("/ground-truth/submit", submit_ground_truth, methods=["POST"], response_model=SubmitGroundTruthResponse, status_code=status.HTTP_200_OK)
 router.add_api_route("/ground-truth/batch-submit", batch_submit_ground_truth, methods=["POST"], response_model=BatchSubmitGroundTruthResponse, status_code=status.HTTP_200_OK)
 router.add_api_route("/ground-truth/upload/preview", preview_ground_truth_file, methods=["POST"], response_model=UploadPreviewResponse, status_code=status.HTTP_200_OK)

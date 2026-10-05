@@ -137,3 +137,33 @@ async def train_convlstm_nowcaster(ctx: dict, job_payload_json: str = "{}") -> s
         return execute_convlstm_retrain
 
     return await _run_retrain(ctx, "train_convlstm_nowcaster", "convlstm", job_payload_json, load)
+
+
+# Redis keys shared with backend/api/label_studio/ground_truth.py
+CALIBRATION_SCHEDULED_KEY = "calibration:check:scheduled"
+CALIBRATION_RUNNING_KEY = "calibration:check:running"
+
+
+async def check_satellite_calibration(ctx: dict, job_payload_json: str = "{}") -> str:
+    """ARQ Worker Job: after measured GHI was saved, measure the satellite relation at every station that has
+    measurements (the relation itself is not changed) -> service/training/calibrate_satellite_ghi.py::run_check."""
+    job_id: str = ctx.get("job_id", datetime.now().strftime("%Y%m%d%H%M%S"))
+    logger = setup_logger(job_id)
+    logger.info(f">> [ARQ Job] check_satellite_calibration started  job_id={job_id}")
+    redis = ctx.get("redis")
+    if redis is not None:
+        await redis.delete(CALIBRATION_SCHEDULED_KEY)  # measurements saved from now on schedule a new check
+        await redis.set(CALIBRATION_RUNNING_KEY, "1", ex=900)
+    try:
+        from service.training.calibrate_satellite_ghi import run_check
+
+        result = await asyncio.to_thread(run_check)
+    except Exception as e:  # noqa: BLE001  the forecast keeps using the calibration file as it is
+        logger.exception("calibration check failed")
+        result = {"status": "failed", "error": str(e)}
+    finally:
+        if redis is not None:
+            await redis.delete(CALIBRATION_RUNNING_KEY)
+    logger.info(f"[ARQ Job] check_satellite_calibration result: {result}")
+    return json.dumps(result, default=str)
+

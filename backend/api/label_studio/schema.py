@@ -82,6 +82,21 @@ class BatchSubmitGroundTruthResponse(BaseModel):
     retrain_status: str
 
 
+class CalibrationStatusResponse(BaseModel):
+    """Has the satellite-to-irradiance relation been compared with measured GHI of this station?"""
+
+    station_id: str
+    state: Literal["fitted", "checked", "insufficient", "not_checked", "no_calibration"] = Field(
+        ..., description="fitted = the relation was fitted on this station; checked = fitted elsewhere and measured here; "
+                         "insufficient = measurements exist but too few have a real satellite frame; not_checked = no check has seen this station"
+    )
+    pairs: int | None = Field(None, description="Measured slots of this station that have a real daytime satellite frame")
+    min_pairs: int = Field(30, description="Pairs needed before the station counts as checked")
+    mae: float | None = Field(None, description="Mean error of the relation at this station, in clear-sky index")
+    checked_at: str | None = Field(None, description="When the last check ran")
+    pending: bool = Field(False, description="A check is scheduled or running")
+
+
 class UploadPreviewResponse(BaseModel):
     filename: str
     headers: list[str]

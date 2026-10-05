@@ -108,6 +108,9 @@ class FakePool:
     async def delete(self, key):
         self.keys.pop(key, None)
 
+    async def exists(self, key):
+        return 1 if key in self.keys else 0
+
     async def enqueue_job(self, name, *args, **kwargs):
         self.jobs.append((name, args, kwargs))
 
@@ -337,8 +340,44 @@ async def check_http_flow():
         r3 = await c.post("/api/label-studio/ground-truth/batch-submit", json={"station_id": "ST-001", "items": [{"timestamp": "2026-10-02T13:20:00", "ghi_actual": 420.0}]})
         assert r1.json()["retrain_enqueued"] is True and r2.json()["retrain_enqueued"] is False
         assert r2.json()["retrain_status"].startswith("already_scheduled") and r3.json()["retrain_status"] == "no_new_labels"
-        assert len(pool.jobs) == 1 and pool.jobs[0][0] == "train_timeseries_lstm"
-        assert pool.jobs[0][2]["_queue_name"] == "train_queue" and pool.jobs[0][2]["_defer_by"] == timedelta(seconds=settings.retrain_debounce_seconds)
+        retrains = [j for j in pool.jobs if j[0] == "train_timeseries_lstm"]
+        assert len(retrains) == 1, "บันทึกสองครั้งติดกัน = retrain รอบเดียว"
+        assert retrains[0][2]["_queue_name"] == "train_queue" and retrains[0][2]["_defer_by"] == timedelta(seconds=settings.retrain_debounce_seconds)
+        # การตรวจสูตรแสงกับค่าวัดจริง: นัดเองหลังบันทึก รวมการบันทึกที่ติดกันเป็นรอบเดียว และไม่ขึ้นกับ ENABLE_RETRAIN
+        checks = [j for j in pool.jobs if j[0] == "check_satellite_calibration"]
+        assert len(checks) == 1 and checks[0][2]["_queue_name"] == "train_queue"
+        assert checks[0][2]["_defer_by"] == timedelta(seconds=gt.CALIBRATION_CHECK_DELAY_SECONDS)
+        settings.enable_retrain = False
+        pool.keys.clear(); pool.jobs.clear()
+        r = await c.post("/api/label-studio/ground-truth/batch-submit", json={"station_id": "ST-001", "items": [{"timestamp": "2026-10-02T13:40:00", "ghi_actual": 430.0}]})
+        assert r.json()["retrain_enqueued"] is False and [j[0] for j in pool.jobs] == ["check_satellite_calibration"]
+
+        # --- สถานะการเทียบสูตรแสงของสถานี (อ่านจากไฟล์ calibration ที่ trainer เขียน)
+        import json as _json
+        import tempfile
+
+        root = Path(tempfile.mkdtemp())
+        (root / "satellite").mkdir()
+        os.environ["SOLAR_MODEL_ROOT"] = str(root)
+        status_of = lambda sid: c.get("/api/label-studio/ground-truth/calibration-status", params={"station_id": sid})  # noqa: E731
+        r = await status_of("ST-001")
+        assert r.status_code == 200 and r.json()["state"] == "no_calibration" and r.json()["pending"] is True, r.text
+        (root / "satellite" / "ghi_calibration.json").write_text(_json.dumps({
+            "intercept": 1.3, "slope": 3.1, "stations": ["ST-002"], "pairs": 93, "mae_leave_one_day_out": 0.2, "min_pairs": 30,
+            "checked": {"ST-003": {"fitted": False, "pairs": 84, "mae": 0.2017}}, "insufficient": {"ST-001": {"pairs": 7}},
+            "checked_at": "2026-10-05 11:39:08 UTC",
+        }), encoding="utf-8")
+        pool.keys.clear()
+        r = await status_of("ST-001")
+        assert (r.json()["state"], r.json()["pairs"], r.json()["min_pairs"], r.json()["pending"]) == ("insufficient", 7, 30, False)
+        assert (await status_of("ST-999")).status_code == 404
+        async with Session() as db:
+            for sid in ("ST-002", "ST-003", "ST-004"):
+                db.add(Station(id=sid, name="t", latitude=7.0, longitude=100.5, panel_area=1000.0, efficiency=0.18, target_capacity_kw=100.0, is_active=True))
+            await db.commit()
+        assert [(await status_of(s)).json()["state"] for s in ("ST-002", "ST-003", "ST-004")] == ["fitted", "checked", "not_checked"]
+        assert (await status_of("ST-003")).json()["mae"] == 0.2017
+        os.environ.pop("SOLAR_MODEL_ROOT")
         settings.enable_retrain = False
 
         # --- Label Studio ล่ม: ยังต้องดูค่าพยากรณ์ได้ แต่บันทึก label ได้ 502 พร้อมเหตุผล

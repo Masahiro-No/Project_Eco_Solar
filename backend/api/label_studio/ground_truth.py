@@ -25,6 +25,10 @@ TH_TZ = timezone(timedelta(hours=7))
 GHI_PROJECT_TITLE = "Solar GHI Ground Truth Verification"
 MAX_GHI = 1500.0
 RETRAIN_SCHEDULED_KEY = "retrain:timeseries:scheduled"  # ต้องตรงกับ service/training/retrain_timeseries.py
+# ตรวจสูตรแสงจากภาพดาวเทียมกับค่าวัดจริง (ต้องตรงกับ service/workers/train_worker.py)
+CALIBRATION_SCHEDULED_KEY = "calibration:check:scheduled"
+CALIBRATION_RUNNING_KEY = "calibration:check:running"
+CALIBRATION_CHECK_DELAY_SECONDS = 60  # รอรวมการบันทึกที่ส่งใกล้กันเป็นรอบเดียว
 
 
 # ----------------------------------------------------------------------------- เวลา / validation
@@ -310,3 +314,34 @@ async def schedule_retrain(station_id: str, changed: int) -> tuple[bool, str]:
         return False, f"enqueue_failed: {e}"
     finally:
         await pool.close()
+
+
+async def schedule_calibration_check(changed: int) -> bool:
+    """หลังบันทึกค่าวัดจริง: นัดงานวัดความคลาดของสูตรแสงจากภาพดาวเทียมที่ทุกสถานีที่มีค่าวัดจริง (ไม่เปลี่ยนสูตร).
+
+    ไม่ขึ้นกับ ENABLE_RETRAIN เพราะไม่ใช่การเทรน. คืน True เมื่อนัดงานใหม่ (False = ไม่มีค่าใหม่ หรือมีรอบที่นัดไว้แล้ว).
+    """
+    if changed <= 0:
+        return False
+
+    from api.jobs.service import JobService
+
+    delay = CALIBRATION_CHECK_DELAY_SECONDS
+    pool = await JobService.get_pool()
+    try:
+        if not await pool.set(CALIBRATION_SCHEDULED_KEY, "1", nx=True, ex=delay + 900):
+            return False
+        try:
+            await pool.enqueue_job(
+                "check_satellite_calibration", json.dumps({"reason": "labels_submitted"}),
+                _queue_name="train_queue", _defer_by=timedelta(seconds=delay),
+            )
+        except Exception:  # noqa: BLE001
+            await pool.delete(CALIBRATION_SCHEDULED_KEY)
+            return False
+        return True
+    except Exception:  # noqa: BLE001  การบันทึกค่าวัดจริงสำเร็จแล้ว: การนัดตรวจพลาดไม่ทำให้การบันทึกล้ม
+        return False
+    finally:
+        await pool.close()
+

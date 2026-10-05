@@ -9,8 +9,9 @@ except ImportError:
     run_inference = None
 
 try:
-    from service.workers.train_worker import train_convlstm_nowcaster, train_timeseries_lstm
+    from service.workers.train_worker import check_satellite_calibration, train_convlstm_nowcaster, train_timeseries_lstm
 except ImportError:
+    check_satellite_calibration = None
     train_timeseries_lstm = None
     train_convlstm_nowcaster = None
 
@@ -37,7 +38,7 @@ class WorkerSettings:
     queue_name = "train_queue"
     job_timeout = 3600  # retrain LSTM อาจนานเกิน default 300 วินาที
     max_tries = 1  # ไม่ retry อัตโนมัติ (retrain ซ้ำทำให้เปลืองและอาจชนล็อก)
-    functions = [f for f in [train_timeseries_lstm, train_convlstm_nowcaster] if f is not None]
+    functions = [f for f in [train_timeseries_lstm, train_convlstm_nowcaster, check_satellite_calibration] if f is not None]
     redis_settings = _redis_settings()
 
 

@@ -37,11 +37,12 @@ K_MIN, K_MAX = 0.05, 1.15
 MIN_PAIRS = 30
 
 
-def collect_pairs(lookback_days: int) -> list[dict[str, Any]]:
+def collect_pairs(lookback_days: int, labels: Any = None) -> list[dict[str, Any]]:
     """Measured GHI paired with the real frame of the same station and 10-minute slot (daylight only)."""
     from service.training.retrain_timeseries import fetch_labels_from_label_studio
 
-    labels = fetch_labels_from_label_studio(lookback_days)
+    if labels is None:
+        labels = fetch_labels_from_label_studio(lookback_days)
     coords = rc.station_coordinates()
     client = rc._minio_client()
     pairs = []
@@ -130,6 +131,31 @@ def check(pairs: list[dict[str, Any]], current: dict[str, Any]) -> dict[str, dic
     return checked
 
 
+def run_check(lookback_days: int = 45) -> dict[str, Any]:
+    """Measure the current line at every station with measured GHI and record the result in the calibration file.
+
+    The line itself is not changed. `checked` holds the stations with at least MIN_PAIRS measured slots that have
+    a real frame; `insufficient` the stations that have measurements but not yet enough pairs, so the web page can
+    say how many are still missing. Runs as a trainer job after measured GHI is saved, and from the CLI (--check).
+    """
+    from service.training.retrain_timeseries import fetch_labels_from_label_studio
+
+    labels = fetch_labels_from_label_studio(lookback_days)
+    pairs = collect_pairs(lookback_days, labels=labels)
+    current = json.loads(CALIBRATION_FILE.read_text(encoding="utf-8"))
+    checked = check(pairs, current)
+    counts: dict[str, int] = {}
+    for p in pairs:
+        counts[p["station_id"]] = counts.get(p["station_id"], 0) + 1
+    labelled = sorted(set(labels["station_id"])) if len(labels) else []
+    current["checked"] = checked
+    current["insufficient"] = {s: {"pairs": counts.get(s, 0)} for s in labelled if s not in checked}
+    current["min_pairs"] = MIN_PAIRS
+    current["checked_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    CALIBRATION_FILE.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+    return {"status": "checked", "checked": checked, "insufficient": current["insufficient"], "min_pairs": MIN_PAIRS}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fit the satellite brightness -> clear-sky index relation on measured GHI")
     parser.add_argument("--lookback-days", type=int, default=45)
@@ -137,14 +163,12 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="keep the line; record its error per station in the file")
     args = parser.parse_args()
 
-    pairs = collect_pairs(args.lookback_days)
     if args.check:
-        current = json.loads(CALIBRATION_FILE.read_text(encoding="utf-8"))
-        current["checked"] = check(pairs, current)
-        print(json.dumps(current["checked"], indent=2))
-        CALIBRATION_FILE.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
-        print(f"written to {CALIBRATION_FILE} (line unchanged: {current['intercept']} - {current['slope']} * rho)")
+        result = run_check(args.lookback_days)
+        print(json.dumps({"checked": result["checked"], "insufficient": result["insufficient"]}, indent=2))
+        print(f"written to {CALIBRATION_FILE} (the line itself is unchanged)")
         return
+    pairs = collect_pairs(args.lookback_days)
     if len(pairs) < MIN_PAIRS:
         raise SystemExit(f"only {len(pairs)} measured slots have a real frame (need {MIN_PAIRS}): nothing fitted")
     result = fit(pairs)
