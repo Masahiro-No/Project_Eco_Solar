@@ -362,7 +362,7 @@
     "help_dp": "The largest amount by which P_gen is below P_target in the next 3 hours (kW); 0 when the target is met throughout",
     "help_reserve": "Reserve to hold = ΔP plus a buffer for the model's forecast error",
     "help_lstm": "Model that forecasts GHI 3 hours ahead from the recent weather data",
-    "help_convlstm": "Model that predicts the next 18 satellite frames, used to measure cloud cover around the station",
+    "help_convlstm": "Model that predicts the next 18 satellite frames, used to measure cloud cover around the station. The first 30 minutes use the cloud cover seen in the newest real frame, after 90 minutes the model's forecast, and a mix in between.",
     "help_ghi_blend": "Blend = LSTM weighted with the satellite result. The satellite weighs more at short lead times (about 80% at 10 min, 50% at 1 hour) and less later.",
     "help_cloud": "Cloud cover = cloudy pixels ÷ all pixels in the 5×5 px box around the station (about 78×55 km)",
     "help_alerts_title": "Alert levels",

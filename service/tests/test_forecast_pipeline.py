@@ -13,6 +13,8 @@ from service.workers.cloud_coverage import (
     IMPACT_HIGH_FROM,
     IMPACT_MEDIUM_FROM,
     aoi_cloud_fraction,
+    model_share,
+    observed_then_forecast,
     clear_sky_index_from_cloud,
     impact_level,
     max_impact_level,
@@ -49,6 +51,17 @@ def test_brightness_is_normalised_by_sun_height_and_low_sun_is_not_used():
     assert aoi_cloud_fraction(frames, cos_zenith=[0.9, 0.35, 0.2]) == [0.0, 1.0, None]
     with pytest.raises(ValueError):
         aoi_cloud_fraction(frames, cos_zenith=[0.9])
+
+
+def test_near_leads_use_the_observed_cloud_cover_and_later_leads_the_forecast():
+    assert model_share(10, 30, 90) == 0.0 and model_share(60, 30, 90) == 0.5 and model_share(120, 30, 90) == 1.0
+    assert observed_then_forecast(0.6, 0.0, 20, 30, 90) == 0.6        # observed cover is held
+    assert observed_then_forecast(0.6, 0.0, 60, 30, 90) == pytest.approx(0.3)
+    assert observed_then_forecast(0.6, 0.2, 150, 30, 90) == 0.2       # ConvLSTM forecast
+    # nothing is substituted for a part that is missing
+    assert observed_then_forecast(0.6, None, 20, 30, 90) == 0.6
+    assert observed_then_forecast(0.6, None, 60, 30, 90) is None
+    assert observed_then_forecast(0.6, None, 150, 30, 90) is None
 
 
 def test_impact_thresholds_come_from_kasten_czeplak():

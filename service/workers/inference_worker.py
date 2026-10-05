@@ -32,7 +32,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from service.workers import decision
-from service.workers.cloud_coverage import MIN_COS_ZENITH, aoi_cloud_fraction
+from service.workers.cloud_coverage import MIN_COS_ZENITH, aoi_cloud_fraction, observed_then_forecast
 from service.workers.ghi_blend import BLEND_TAU_MIN, BLEND_W0, blend_ghi
 from service.workers.satellite_preprocessor import load_satellite_window
 from service.workers.solar_geometry import NIGHT_CLEARSKY_GHI, clearsky_ghi_at, cos_zenith_at
@@ -368,18 +368,22 @@ def _satellite_branch(
     fractions = aoi_cloud_fraction(predicted, cos_zenith=[cos_zenith_at(lat, lon, t) for t in frame_times])
     out["cloud_now"] = aoi_cloud_fraction(window.frames[0, -1, 0], cos_zenith=[cos_end])[0]
 
+    # near lead times keep the cloud cover seen in the newest real frame, later ones use the ConvLSTM forecast
     lag_steps = out["lag_minutes"] // STEP_MINUTES
     for i in range(n_steps):
         j = i + lag_steps
-        if 0 <= j < len(fractions) and fractions[j] is not None:
-            out["cloud"][i] = fractions[j]
-            out["lead_min"][i] = float((j + 1) * STEP_MINUTES)
+        if 0 <= j < len(fractions):
+            lead = float((j + 1) * STEP_MINUTES)
+            cover = observed_then_forecast(out["cloud_now"], fractions[j], lead)
+            if cover is not None:
+                out["cloud"][i] = cover
+                out["lead_min"][i] = lead
     out["status"] = window.status
-    known = [f for f in fractions if f is not None]
+    known = [c for c in out["cloud"] if c is not None]
+    span = f"{min(known) * 100:.0f}-{max(known) * 100:.0f}% on {len(known)} steps" if known else "no usable step"
     logger.info(
         f"[Satellite] frames end {window.end_time:%H:%M} UTC, lag {out['lag_minutes']} min, "
-        f"shift {window.shift_minutes} min; cloud now {out['cloud_now'] * 100:.0f}%, "
-        f"forecast {min(known) * 100:.0f}-{max(known) * 100:.0f}% on {len(known)} frames"
+        f"shift {window.shift_minutes} min; cloud now {out['cloud_now'] * 100:.0f}%, forecast {span}"
     )
     return out
 

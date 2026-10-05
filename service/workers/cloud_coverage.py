@@ -38,6 +38,13 @@ LOSS_HIGH = 0.30
 
 IMPACT_LEVELS = ("low", "medium", "high")
 
+# Cloud cover of the satellite branch at a lead time t (minutes after the newest real frame):
+# up to OBSERVED_UNTIL_MIN the cover seen in that frame, from MODEL_FROM_MIN on the ConvLSTM forecast,
+# a linear cross-fade in between. Backtest on real frames (service/training/backtest_cloud.py, 4 Oct 2026):
+# holding the observed cover has the lower error up to ~50 min, the ConvLSTM beyond ~70 min.
+OBSERVED_UNTIL_MIN = float(os.environ.get("CLOUD_OBSERVED_UNTIL_MIN", "30"))
+MODEL_FROM_MIN = float(os.environ.get("CLOUD_MODEL_FROM_MIN", "90"))
+
 
 def cloud_fraction_for_loss(loss: float) -> float:
     """Cloud fraction at which Kasten-Czeplak gives the given relative loss of GHI."""
@@ -88,6 +95,34 @@ def aoi_cloud_fraction(
     for frame_aoi, c in zip(aoi, cos):
         out.append(float((frame_aoi / c >= threshold).mean()) if c >= MIN_COS_ZENITH else None)
     return out
+
+
+def model_share(lead_min: float, observed_until: float = OBSERVED_UNTIL_MIN, model_from: float = MODEL_FROM_MIN) -> float:
+    """Share of the ConvLSTM forecast in the satellite cloud cover at this lead time, in [0, 1]."""
+    if model_from <= observed_until:
+        return 1.0 if lead_min > observed_until else 0.0
+    return min(1.0, max(0.0, (lead_min - observed_until) / (model_from - observed_until)))
+
+
+def observed_then_forecast(
+    observed: Optional[float],
+    forecast: Optional[float],
+    lead_min: float,
+    observed_until: float = OBSERVED_UNTIL_MIN,
+    model_from: float = MODEL_FROM_MIN,
+) -> Optional[float]:
+    """Satellite cloud cover at one lead time: the observed cover first, the ConvLSTM forecast later.
+
+    None when the part that is needed at this lead time is not available (no value is substituted).
+    """
+    share = model_share(lead_min, observed_until, model_from)
+    if share >= 1.0:
+        return forecast
+    if share <= 0.0:
+        return observed
+    if observed is None or forecast is None:
+        return None
+    return (1.0 - share) * observed + share * forecast
 
 
 def clear_sky_index_from_cloud(cloud_fraction: float) -> float:
