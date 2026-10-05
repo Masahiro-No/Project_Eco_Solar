@@ -303,6 +303,9 @@ services:
       # --- cloud coverage in the AOI around the station ---
       CLOUD_AOI_SIZE_PX: "5"
       CLOUD_REFLECTANCE_THRESHOLD: "0.25"
+      # satellite cloud cover per lead time: observed value up to the first, ConvLSTM forecast from the second (minutes)
+      CLOUD_OBSERVED_UNTIL_MIN: "30"
+      CLOUD_MODEL_FROM_MIN: "90"
       # --- missing satellite frames: shift the 12-frame window back at most this far ---
       SATELLITE_MAX_SHIFT_MIN: "30"
     depends_on:
