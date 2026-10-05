@@ -99,8 +99,11 @@ def make_windows(
     lookback: int = LOOKBACK_STEPS,
     horizon: int = FORECAST_STEPS,
     stride: int = 1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return_label_mask: bool = False,
+):
     """ตัด window ที่ไม่มี NaN เลยตลอดช่วง lookback+horizon.
+
+    return_label_mask=True คืนค่าเพิ่มอีกตัว: label_mask (n, horizon) bool บอกว่าช่องพยากรณ์ไหนเป็น GHI ที่วัดจริง
 
     Returns:
         X (n, lookback, 16) หน่วยจริง, Y (n, horizon) GHI จริง,
@@ -108,20 +111,23 @@ def make_windows(
         has_label (n,) bool — ช่วงพยากรณ์ของ window มี GHI จริงจาก label อย่างน้อย 1 ช่อง
     """
     span = lookback + horizon
+    empty = (
+        np.empty((0, lookback, len(ALIGNED_FEATURE_COLS)), np.float32),
+        np.empty((0, horizon), np.float32),
+        np.empty((0,), "datetime64[ns]"),
+        np.empty((0,), bool),
+    )
+    if return_label_mask:
+        empty = empty + (np.empty((0, horizon), bool),)
     if len(frame) < span:
-        return (
-            np.empty((0, lookback, len(ALIGNED_FEATURE_COLS)), np.float32),
-            np.empty((0, horizon), np.float32),
-            np.empty((0,), "datetime64[ns]"),
-            np.empty((0,), bool),
-        )
+        return empty
     feats = frame[ALIGNED_FEATURE_COLS].to_numpy(dtype=np.float32)
     ghi = frame["GHI"].to_numpy(dtype=np.float32)
     lab = frame["is_label"].to_numpy(dtype=bool)
     bad = np.isnan(feats).any(axis=1).astype(np.int32)
     csum = np.concatenate([[0], np.cumsum(bad)])
 
-    xs, ys, starts, has_label = [], [], [], []
+    xs, ys, starts, has_label, masks = [], [], [], [], []
     idx = frame.index.tz_convert("UTC").tz_localize(None).to_numpy()
     for s in range(0, len(frame) - span + 1, stride):
         if csum[s + span] - csum[s] != 0:
@@ -130,14 +136,47 @@ def make_windows(
         ys.append(ghi[s + lookback:s + span])
         starts.append(idx[s])
         has_label.append(bool(lab[s + lookback:s + span].any()))
+        masks.append(lab[s + lookback:s + span].copy())
     if not xs:
-        return (
-            np.empty((0, lookback, len(ALIGNED_FEATURE_COLS)), np.float32),
-            np.empty((0, horizon), np.float32),
-            np.empty((0,), "datetime64[ns]"),
-            np.empty((0,), bool),
-        )
-    return np.stack(xs), np.stack(ys), np.array(starts, dtype="datetime64[ns]"), np.array(has_label, dtype=bool)
+        return empty
+    out = (np.stack(xs), np.stack(ys), np.array(starts, dtype="datetime64[ns]"), np.array(has_label, dtype=bool))
+    return out + (np.stack(masks),) if return_label_mask else out
+
+
+def label_holdout(
+    starts: np.ndarray,
+    label_mask: np.ndarray,
+    lookback: int = LOOKBACK_STEPS,
+    min_points: int = 20,
+) -> Optional[dict]:
+    """กันค่าที่วัดจริงของ "วันล่าสุดที่มี label" ไว้ตรวจ (ไม่ใช้เทรน) เพื่อวัดว่าโมเดลใหม่แม่นขึ้นเทียบกับค่าจริงหรือไม่.
+
+    ต้องมี label อย่างน้อย 2 วัน (วันหนึ่งไว้เทรน วันล่าสุดไว้ตรวจ) และจุดที่ตรวจได้อย่างน้อย min_points
+    Returns None ถ้าทำไม่ได้ มิฉะนั้น dict:
+        day        วันที่กันไว้ (เวลาไทย, 'YYYY-MM-DD')
+        val_idx    window ที่ช่วงพยากรณ์มี label ของวันนั้น
+        val_mask   (len(val_idx), horizon) bool: ช่องพยากรณ์ที่เป็น label ของวันนั้น (วัด MAE เฉพาะช่องเหล่านี้)
+        touches    (n,) bool: window ที่ช่วงเวลาทั้งหมดแตะวันนั้น ต้องตัดออกจาก train ทั้งหมด
+    """
+    if len(starts) == 0 or not label_mask.any():
+        return None
+    horizon = label_mask.shape[1]
+    step = np.timedelta64(10, "m")
+    th = np.timedelta64(7, "h")
+    target_times = starts[:, None] + step * (lookback + np.arange(horizon))[None, :]   # เวลาของแต่ละช่องพยากรณ์ (UTC)
+    target_days = (target_times + th).astype("datetime64[D]")
+    label_days = np.unique(target_days[label_mask])
+    if len(label_days) < 2:
+        return None
+    day = label_days[-1]
+    val_mask_all = label_mask & (target_days == day)
+    val_idx = np.where(val_mask_all.any(axis=1))[0]
+    if int(val_mask_all.sum()) < min_points:
+        return None
+    first_day = (starts + th).astype("datetime64[D]")
+    last_day = (starts + step * (lookback + horizon - 1) + th).astype("datetime64[D]")
+    touches = (first_day <= day) & (last_day >= day)
+    return {"day": str(day), "val_idx": val_idx, "val_mask": val_mask_all[val_idx], "touches": touches}
 
 
 def split_by_day(

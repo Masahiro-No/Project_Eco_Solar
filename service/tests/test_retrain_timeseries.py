@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from service.training.dataset import ALIGNED_FEATURE_COLS, FORECAST_STEPS, LOOKBACK_STEPS
-from service.training.features import build_station_frame, make_windows, split_by_day
+from service.training.features import build_station_frame, label_holdout, make_windows, split_by_day
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "model" / "time-series"
 
@@ -109,6 +109,32 @@ def test_labeled_windows_always_train():
     assert hl.sum() > 0
     assert hl[tr].sum() == hl.sum()  # ทุก window ที่มี label อยู่ใน train
     assert not hl[va].any()
+
+
+def test_newest_labelled_day_is_held_out_for_the_gate():
+    w = _synthetic_weather(days=6, start="2026-10-01 00:00")
+    # ค่าที่วัดจริง 2 วัน: 3 ต.ค. และ 5 ต.ค. เวลา 10:00-12:50 ไทย
+    stamps = [pd.Timestamp(f"2026-10-0{d} 03:00", tz="UTC") + pd.Timedelta(minutes=10 * i) for d in (3, 5) for i in range(18)]
+    f = build_station_frame(w, labels=pd.Series([400.0] * len(stamps), index=stamps))
+    X, Y, starts, has_label, mask = make_windows(f, stride=1, return_label_mask=True)
+    assert mask.shape == Y.shape and mask.any(axis=1).tolist() == has_label.tolist()
+
+    h = label_holdout(starts, mask)
+    assert h["day"] == "2026-10-05" and h["val_mask"].sum() >= 20
+    # ทุกจุดที่ใช้ตรวจเป็นค่าที่วัดจริงของวันที่กันไว้
+    assert np.all(Y[h["val_idx"]][h["val_mask"]] == 400.0)
+    # ไม่มี window ไหนที่แตะวันนั้นเหลือให้เทรน และ label ของ 3 ต.ค. ยังอยู่ในชุดเทรน
+    train = np.where(~h["touches"])[0]
+    assert not np.isin(h["val_idx"], train).any()
+    assert has_label[train].any()
+    last_slot_day = (starts[train] + np.timedelta64(10, "m") * (Y.shape[1] + 144 - 1) + np.timedelta64(7, "h")).astype("datetime64[D]")
+    first_day = (starts[train] + np.timedelta64(7, "h")).astype("datetime64[D]")
+    assert not ((first_day <= np.datetime64("2026-10-05")) & (last_slot_day >= np.datetime64("2026-10-05"))).any()
+
+    # มี label วันเดียว: กันไว้ตรวจไม่ได้ (ไม่เหลือค่าจริงไว้เทรน)
+    one_day = build_station_frame(w, labels=pd.Series([400.0] * 18, index=stamps[:18]))
+    _, _, s1, _, m1 = make_windows(one_day, stride=1, return_label_mask=True)
+    assert label_holdout(s1, m1) is None
 
 
 def test_label_timestamps_floor_to_10_minutes():
