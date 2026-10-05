@@ -85,6 +85,7 @@ uv run uvicorn main:app --reload
 | `check_ground_truth_flow.py` | ตรวจ 6 หมวด: ช่องเวลา 10 นาที, ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP ใช้ SQLite ในหน่วยความจำและ Label Studio จำลองเฉพาะในการทดสอบ ไม่แตะข้อมูลจริง |
 | `replay_inference.py` | รันโมเดลจริงกับข้อมูลจริงของสถานีและเวลาที่ระบุ ไม่เขียนฐานข้อมูล |
 | `cleanup_test_data.py` | แสดงรายการข้อมูลทดสอบที่ค้าง (บัญชี, bucket, สถานี `ST-TEST-*`, แถวพยากรณ์เก่า) และลบเมื่อสั่ง `--apply` แล้วพิมพ์ยืนยันเท่านั้น |
+| `convert_wind_speed_to_ms.py` | แปลงความเร็วลมของแถว Open-Meteo ที่เก็บก่อน 5 ต.ค. 2026 จาก กม./ชม. เป็น ม./วินาที ครั้งเดียว (รันแล้วกับฐานข้อมูลนี้ และไม่ยอมทำซ้ำ) |
 | `openapi_to_csv.py` | เขียนรายการ endpoint ลง `api_snapshot.csv` และ `api_snapshot.xlsx` |
 | `samples/` | ไฟล์ GHI ตัวอย่าง (csv, xlsx) สำหรับสคริปต์ตรวจ |
 
