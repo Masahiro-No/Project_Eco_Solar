@@ -1,7 +1,7 @@
 # Label Studio Module (`backend/api/label_studio`)
 
 รับค่า GHI ที่วัดจริงจากผู้ดูแล เก็บเป็น label ใน Label Studio แล้วนัดงาน retrain LSTM
-หน้าเว็บที่ใช้โมดูลนี้คือ *Label ค่าจริง* (`/labeling`) ทุกเส้นทางต้องเป็น role `admin`
+หน้าเว็บที่ใช้โมดูลนี้คือ *บันทึกค่าวัดจริง* (`/labeling`) ทุกเส้นทางต้องเป็น role `admin`
 
 ## ทางเดินของข้อมูล
 
