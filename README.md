@@ -164,6 +164,8 @@ P_gen(t)  = พื้นที่แผง × ประสิทธิภาพ 
 | เกณฑ์ผ่าน | MAE บนชุดตรวจไม่สูงกว่าเดิม | MSE บนชุดตรวจ (ช่วงเวลาล่าสุด) ไม่สูงกว่าเดิม |
 | ผลรอบล่าสุด (5 ต.ค. 2026) | v1.1.0 → v1.1.1, MAE 33.5 → 25.3 W/m² (452 windows) | v1.0.0 → v1.0.1, MSE 0.0117 → 0.0088, SSIM 0.50 → 0.57, ความคลาดเคลื่อนของ % เมฆในกรอบ 20.9 → 19.8 จุด (39 ชุด, 654 เฟรม) |
 
+**คนอยู่ในวงจรทั้งสองโมเดล:** LSTM ใช้ค่า GHI ที่วัดจริงซึ่งผู้ดูแลอัปโหลดหรือกรอกที่หน้า *Label ค่าจริง* ส่วน ConvLSTM เรียนจากการทำนายภาพถัดไป คำตอบจึงเป็นภาพจริงเอง สิ่งที่คนเพิ่มได้คือการตรวจว่าภาพไหนใช้ไม่ได้ ที่หน้า *ตรวจภาพดาวเทียม* ผู้ดูแลเห็นภาพจริงรายวันพร้อมข้อสังเกตอัตโนมัติ (ภาพดำ, ภาพขาดบางส่วน, สว่างจ้า, ความสว่างกระโดด) แล้วกดว่าใช้ได้หรือใช้ไม่ได้ ภาพที่ถูกปฏิเสธจะไม่เข้าชุดเทรนรอบถัดไป หน้าเดียวกันแสดงจำนวนภาพใหม่ที่สะสม (x/50) รุ่นโมเดล และผล retrain รอบล่าสุด ค่า GHI ที่วัดจริงยังใช้ปรับสูตรแปลงภาพเป็นแสงด้วย (ข้อ 2.1)
+
 label ที่บอกว่ามีแดดตอนกลางคืนจะไม่ถูกใช้ ผลทุกรอบบันทึกใน MLflow (`solar_lstm_retrain`, `solar_convlstm_retrain`)
 ตัวเลขข้างบนวัดบนข้อมูล 4–6 วันล่าสุดของระบบนี้ จึงบอกได้ว่าโมเดลปรับเข้ากับข้อมูลช่วงนี้ดีขึ้น ยังไม่ใช่ผลระยะยาว
 
@@ -176,7 +178,7 @@ docker exec trainer-worker sh -c 'cd /workspace && python -m service.training.re
 | โซน | ใครเข้าได้ | ประกอบด้วย |
 |---|---|---|
 | Public | ผู้ใช้ที่ล็อกอิน role `operator` | เว็บ :3000 (แดชบอร์ด พยากรณ์ สนับสนุนการตัดสินใจ แจ้งเตือน สถานี คู่มือ) และ API อ่านข้อมูล :8000 |
-| Private (ผู้ดูแล) | role `admin` | หน้า Label ค่าจริง, แก้ไขสถานีและเป้ากำลังผลิต, API สั่งงาน (jobs, storage, ingestion trigger) |
+| Private (ผู้ดูแล) | role `admin` | หน้า Label ค่าจริง, หน้าตรวจภาพดาวเทียม, แก้ไขสถานีและเป้ากำลังผลิต, API สั่งงาน (jobs, storage, ingestion trigger) |
 | Private (นักพัฒนา) | เฉพาะเครื่อง server (`127.0.0.1`) | PostgreSQL 5432, Redis 6379, MinIO 9000/9001, Label Studio 8080, MLflow 5000, Grafana 3002, Prometheus 9090, Loki 3100, Tempo 3200 |
 
 API ตรวจ token และ role ที่ทุก endpoint ของข้อมูลระบบ ผู้ที่ไม่ล็อกอินได้ 401 และ operator ที่เรียก endpoint ของผู้ดูแลได้ 403
@@ -230,7 +232,7 @@ Grafana มี dashboard `SolarDSS Operations` (รอบ ingestion, รอบ�
 ## 6. โครงสร้างโปรเจกต์
 
 ```text
-backend/            FastAPI: auth (role), stations, ingestion, inference, dashboard, label_studio, jobs
+backend/            FastAPI: auth (role), stations, ingestion, inference, dashboard, label_studio, frame_review, jobs
 service/workers/    ingestion_worker, inference_worker, train_worker
                     cloud_coverage, ghi_blend, decision, solar_geometry, satellite_preprocessor, convlstm_batch
 service/training/   train (LSTM + ablation), retrain_timeseries, retrain_convlstm, calibrate_satellite_ghi, backtest_cloud, features

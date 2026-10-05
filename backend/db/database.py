@@ -26,6 +26,7 @@ async def create_database_schema() -> None:
     from api.stations import model as station_model  # noqa: F401
     from api.inference import model as inference_model  # noqa: F401
     from api.ingestion import model as ingestion_model  # noqa: F401
+    from api.frame_review import model as frame_review_model  # noqa: F401
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

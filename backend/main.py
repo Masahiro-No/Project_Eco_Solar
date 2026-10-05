@@ -16,6 +16,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from api.auth.router import router as auth_router
 from api.dashboard.router import router as dashboard_router
+from api.frame_review.router import router as frame_review_router
 from api.inference.router import router as inference_router
 from api.ingestion.router import router as ingestion_router
 from api.jobs.router import router as jobs_router
@@ -120,6 +121,7 @@ app.include_router(label_studio_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 app.include_router(inference_router, prefix="/api")
 app.include_router(ingestion_router, prefix="/api")
+app.include_router(frame_review_router, prefix="/api")
 
 # ── Instrument FastAPI — สร้าง Span & Metrics อัตโนมัติทุก HTTP Request ─────
 FastAPIInstrumentor.instrument_app(

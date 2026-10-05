@@ -70,7 +70,7 @@ export class LabelingApiError extends Error {
   }
 }
 
-async function send<T>(path: string, init: RequestInit, json: boolean): Promise<T> {
+export async function send<T>(path: string, init: RequestInit, json: boolean): Promise<T> {
   const headers: Record<string, string> = { ...getAuthHeaders() };
   // multipart (FormData): ห้ามใส่ Content-Type เอง ให้ browser ใส่ boundary
   if (json) headers['Content-Type'] = 'application/json';

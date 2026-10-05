@@ -334,7 +334,38 @@ async def check_http_flow():
     await engine.dispose()
 
 
+def check_frame_review():
+    """Automatic hints of the satellite frame review (pure functions)."""
+    import io as _io
+
+    import numpy as np
+    from PIL import Image
+
+    from api.frame_review.service import analyse_frame, flag_jumps
+
+    def png(arr):
+        buf = _io.BytesIO()
+        Image.fromarray((arr * 255).astype("uint8")).save(buf, format="PNG")
+        return buf.getvalue()
+
+    lat, lon = 7.0086, 100.4988
+    noon = datetime(2026, 10, 4, 5, 0, tzinfo=timezone.utc)      # 12:00 เวลาไทย
+    night = datetime(2026, 10, 4, 17, 0, tzinfo=timezone.utc)    # 00:00 เวลาไทย
+    assert analyse_frame(png(np.zeros((64, 64))), lat, lon, night) is None            # ภาพกลางคืนไม่นำมาตรวจ
+    assert analyse_frame(png(np.zeros((64, 64))), lat, lon, noon)["flags"] == ["blank"]
+    half = np.full((64, 64), 0.2)
+    half[:, :20] = 0.0
+    assert analyse_frame(png(half), lat, lon, noon)["flags"] == ["partial"]
+    clear = analyse_frame(png(np.full((64, 64), 0.1)), lat, lon, noon)
+    assert clear["flags"] == [] and clear["cloud_pct"] == 0.0
+    items = [{"timestamp": noon + timedelta(minutes=10 * i), "rho": r, "flags": []} for i, r in enumerate((0.15, 0.60, 0.16))]
+    flag_jumps(items)
+    assert [it["flags"] for it in items] == [[], ["jump"], []]
+    print("PASS frame review (night skipped, blank / partial / jump hints)")
+
+
 if __name__ == "__main__":
+    check_frame_review()
     check_time_rules()
     check_sample_files()
     check_store_upsert()

@@ -283,6 +283,25 @@ def station_coordinates() -> dict[str, tuple[float, float]]:
     return {r[0]: (float(r[1]), float(r[2])) for r in rows}
 
 
+def rejected_frames() -> set[tuple[str, datetime]]:
+    """Frames a reviewer marked as not usable (frame review page). They never enter a training sequence."""
+    from sqlalchemy import create_engine, text
+
+    url = os.environ.get("RETRAIN_DATABASE_URL") or os.environ.get("DATABASE_URL") or os.environ.get("database_url", "")
+    if not url:
+        return set()
+    engine = create_engine(url.replace("+asyncpg", "+psycopg2"))
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT station_id, frame_timestamp FROM satellite_frame_reviews WHERE status = 'rejected'")).fetchall()
+    except Exception as e:  # noqa: BLE001  the table does not exist before the first review
+        logger.info(f"No frame reviews read ({type(e).__name__})")
+        return set()
+    finally:
+        engine.dispose()
+    return {(r[0], r[1].astimezone(timezone.utc).replace(second=0, microsecond=0)) for r in rows}
+
+
 def load_frame(minio_client, station_id: str, ts: datetime) -> np.ndarray:
     """One cached real frame as float32 (64, 64) in [0, 1], decoded exactly as the inference worker does."""
     from service.workers.satellite_preprocessor import CACHE_BUCKET, frame_object_name, load_and_preprocess_single_frame
@@ -310,10 +329,15 @@ def build_dataset(minio_client, coords: dict[str, tuple[float, float]], stride: 
     # every candidate frame is a daytime scan, so an all-black one is NICT's "no image" tile, not an observation
     frames: dict[tuple[str, datetime], np.ndarray] = {}
     blank = 0
+    rejected = rejected_frames()
+    skipped_by_review = 0
     items: list[tuple[datetime, str]] = []
     for station_id, times in day.items():
         real_times = []
         for ts in times:
+            if (station_id, ts) in rejected:
+                skipped_by_review += 1
+                continue
             frame = load_frame(minio_client, station_id, ts)
             if float(frame.max()) == 0.0:
                 blank += 1
@@ -342,6 +366,7 @@ def build_dataset(minio_client, coords: dict[str, tuple[float, float]], stride: 
         "newest_scan": newest,
         "frames_used": len(frames),
         "blank_frames_skipped": blank,
+        "frames_rejected_by_review": skipped_by_review,
     }
 
 
@@ -540,6 +565,18 @@ def _log_mlflow(summary: dict[str, Any]) -> None:
         logger.warning(f"MLflow logging skipped: {e}")
 
 
+def _publish_result(redis_client, summary: dict[str, Any]) -> None:
+    """Keep a short summary of the run in Redis for the frame review page."""
+    keep = ("status", "reason", "version", "previous_version", "sequences", "train_sequences", "val_sequences", "frames_used",
+            "blank_frames_skipped", "frames_rejected_by_review", "best_epoch", "baseline", "candidate", "duration_seconds")
+    short = {k: summary[k] for k in keep if k in summary}
+    short["finished_at"] = _utc_stamp()
+    try:
+        redis_client.set(batch.LAST_RESULT_KEY, json.dumps(short, default=str))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ----------------------------------------------------------------------------- entry points
 def retrain_status(batch_size: Optional[int] = None) -> dict[str, Any]:
     """New daytime scans since the last retrain attempt (what the trigger looks at)."""
@@ -612,10 +649,12 @@ def execute_convlstm_retrain(payload: dict[str, Any], force: bool = False) -> di
 
         train_idx, val_idx, cut = split_by_time(data["starts"], _env_float("CONVLSTM_VAL_FRACTION", 0.2))
         min_train, min_val = _env_int("CONVLSTM_MIN_TRAIN_SEQUENCES", 20), _env_int("CONVLSTM_MIN_VAL_SEQUENCES", 5)
-        counts = {"sequences": len(data["starts"]), "train_sequences": len(train_idx), "val_sequences": len(val_idx), "frames_used": data["frames_used"], "blank_frames_skipped": data["blank_frames_skipped"]}
+        counts = {"sequences": len(data["starts"]), "train_sequences": len(train_idx), "val_sequences": len(val_idx), "frames_used": data["frames_used"], "blank_frames_skipped": data["blank_frames_skipped"], "frames_rejected_by_review": data["frames_rejected_by_review"]}
         if len(train_idx) < min_train or len(val_idx) < min_val:
             logger.info(f"Not enough real sequences yet: {counts} (need {min_train} train / {min_val} val)")
-            return {"status": "insufficient_data", **counts, "min_train": min_train, "min_val": min_val}
+            result = {"status": "insufficient_data", **counts, "min_train": min_train, "min_val": min_val}
+            _publish_result(r, result)
+            return result
 
         # keep the run bounded as the cache grows: fine-tune on the newest sequences
         train_idx = train_idx[-_env_int("CONVLSTM_MAX_TRAIN_SEQUENCES", 300):]
@@ -673,6 +712,7 @@ def execute_convlstm_retrain(payload: dict[str, Any], force: bool = False) -> di
             logger.info(f">> ConvLSTM v{summary['version']} deployed: val MSE {baseline['mse']:.5f} -> {candidate['mse']:.5f}")
         summary["duration_seconds"] = round(time.time() - started, 1)
         _log_mlflow(summary)
+        _publish_result(r, summary)
         return summary
     except Exception as e:  # noqa: BLE001
         logger.exception("ConvLSTM retrain failed")

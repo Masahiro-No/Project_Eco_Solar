@@ -27,6 +27,8 @@ MIN_COS_ZENITH_TRAIN = float(os.environ.get("CONVLSTM_MIN_COS_ZENITH", "0.10"))
 LAST_FRAME_KEY = "convlstm:retrain:last_frame_time"   # newest scan time covered by the last retrain attempt
 SCHEDULED_KEY = "convlstm:retrain:scheduled"          # a retrain job is queued or running
 RUNNING_KEY = "convlstm:retrain:running"
+STATUS_KEY = "convlstm:retrain:status"            # JSON: what the trigger saw in the last ingestion round
+LAST_RESULT_KEY = "convlstm:retrain:last_result"  # JSON: summary of the last retrain run
 
 _FRAME_RE = re.compile(r"^(?P<station>[^/]+)/b03_(?P<ts>\d{8}_\d{6})\.png$")
 

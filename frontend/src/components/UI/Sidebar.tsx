@@ -11,6 +11,7 @@ import {
   LightbulbIcon,
   BellIcon,
   ClipboardCheckIcon,
+  SatelliteIcon,
   BookOpenIcon,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -25,6 +26,7 @@ const items = [
   { id: 'alerts', key: 'nav_alerts' as const, icon: BellIcon, href: '/alerts', adminOnly: false },
   { id: 'stations', key: 'nav_stations' as const, icon: MapPinIcon, href: '/stations', adminOnly: false },
   { id: 'labeling', key: 'nav_labeling' as const, icon: ClipboardCheckIcon, href: '/labeling', adminOnly: true },
+  { id: 'frame-review', key: 'nav_frame_review' as const, icon: SatelliteIcon, href: '/frame-review', adminOnly: true },
   { id: 'help', key: 'nav_help' as const, icon: BookOpenIcon, href: '/help', adminOnly: false },
 ];
 

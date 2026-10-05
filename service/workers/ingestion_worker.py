@@ -300,9 +300,11 @@ async def _trigger_inference(ctx: dict, db, stations, round_started: datetime) -
 
 
 async def _trigger_convlstm_retrain(ctx: dict, stations) -> dict[str, Any]:
-    """Enqueue the ConvLSTM retrain when enough new real daytime scans are in the frame cache."""
-    if not settings.enable_retrain:
-        return {"status": "retrain_disabled"}
+    """Enqueue the ConvLSTM retrain when enough new real daytime scans are in the frame cache.
+
+    The batch counter is published every round (also while retraining is switched off), so the
+    frame review page can show it.
+    """
     pool = ctx.get("redis")
     if pool is None:
         return {"status": "no_redis"}
@@ -317,6 +319,11 @@ async def _trigger_convlstm_retrain(ctx: dict, stations) -> dict[str, Any]:
         since = convlstm_batch.parse_time(await pool.get(convlstm_batch.LAST_FRAME_KEY))
         scans = await asyncio.to_thread(convlstm_batch.list_cached_scans, client)
         status = convlstm_batch.batch_status(scans, coords, since, settings.convlstm_retrain_threshold)
+        published = {k: status[k] for k in ("new_scans", "batch_size", "newest_scan", "since")}
+        published.update(retrain_enabled=settings.enable_retrain, checked_at=datetime.now(timezone.utc).isoformat())
+        await pool.set(convlstm_batch.STATUS_KEY, json.dumps(published))
+        if not settings.enable_retrain:
+            return {"status": "retrain_disabled", "new_scans": status["new_scans"], "batch_size": status["batch_size"]}
         if not status["due"]:
             return {"status": "accumulating", "new_scans": status["new_scans"], "batch_size": status["batch_size"]}
 
