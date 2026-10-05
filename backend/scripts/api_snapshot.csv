@@ -44,14 +44,18 @@ POST,/api/inference/predict,Enqueue 3-Hour Solar Forecast Request,สั่ง�
 GET,/api/inference/result/{job_id},Get Forecast Result by Job ID,ดึงผลลัพธ์การพยากรณ์เมื่อ Worker ประมวลผลเสร็จ,inference,Yes
 GET,/api/inference/latest/{station_id},Get Latest Pre-computed Forecast for Station Dashboard,ดึงผลการพยากรณ์รอบล่าสุดของสถานีขึ้นแสดงบน Dashboard ทันที,inference,Yes
 GET,/api/inference/history/{station_id},Get Historical Forecasts for Comparison,ดึงประวัติผลพยากรณ์ย้อนหลังเพื่อนำไปพลอตกราฟเปรียบเทียบ,inference,Yes
-GET,/api/inference/predictions-by-date,"Forecasts of a day aligned to real time, with ground-truth labels",ค่าพยากรณ์ + GHI จาก weather_history ของวันที่เลือก (เรียงตามเวลาจริง) + ค่าจริงที่ label ไว้แล้ว สำหรับหน้า labeling.,inference,Yes
+GET,/api/inference/predictions-by-date,"Forecasts of a day aligned to real time, with ground-truth labels","ค่าพยากรณ์ + GHI จาก weather_history ของวันที่เลือก (เรียงตามเวลาจริง) + ค่าจริงที่ label ไว้แล้ว
+
+ใช้ทั้งหน้า labeling (predicted_ghi = รอบล่าสุด) และกราฟทั้งวันของหน้าพยากรณ์ (forecast_* ตาม lead_minutes).",inference,Yes
 POST,/api/ingestion/trigger,Trigger Real-time Weather & Satellite Ingestion,สั่งดึงข้อมูลสภาพอากาศแบบ Real-time (Open-Meteo) และภาพดาวเทียม Himawari (NICT) เข้าสู่ระบบทันที,ingestion,Yes
 POST,/api/ingestion/catchup,Trigger Auto Catch-up / Gap Backfill for Station,สั่งตรวจสอบ Gap ของข้อมูลและดึงข้อมูลย้อนหลังทั้ง Weather Time-Series และภาพถ่ายดาวเทียม 12 เฟรมอัตโนมัติ,ingestion,Yes
 GET,/api/ingestion/weather/{station_id}/recent,Get Normalized Weather Time-series for Station,ดึงข้อมูลสภาพอากาศย้อนหลังระดับ Canonical Schema เพื่อใช้เป็น Input สำหรับโมเดล LSTM,ingestion,Yes
 GET,/api/ingestion/satellite/{station_id}/frames,Get Recent Satellite Frame Sequences,ดึงประวัติ URL ภาพถ่ายดาวเทียม Himawari ล่าสุดเพื่อใช้ส่งให้ ConvLSTM Cloud Motion Model,ingestion,Yes
 GET,/api/ingestion/status,Get Ingestion Health & Metrics,"ตรวจสอบสถานะสุขภาพและการเชื่อมต่อ Data Source (Open-Meteo, NICT Himawari) และจำนวนข้อมูลในระบบ",ingestion,Yes
 GET,/api/ingestion/satellite/{station_id}/latest.png,Newest real satellite crop around a station (PNG),ภาพดาวเทียมจริงล่าสุดรอบสถานี (true-colour 64x64 พิกเซล) ที่ inference worker เก็บไว้ใน MinIO.,ingestion,Yes
+GET,/api/ingestion/satellite/{station_id}/day-frames,Real satellite frames of a day and the newest ConvLSTM forecast frames,"Real Band 03 frames of one station and day, and for today the frames the ConvLSTM predicted in the newest round.",ingestion,Yes
 GET,/api/frame-review/frames,List Frames,"Real daytime satellite frames of one station and day, with automatic hints and the saved reviews.",frame-review,Yes
 POST,/api/frame-review/frames,Submit Reviews,Save the reviewer's verdicts. Rejected frames are left out of the next ConvLSTM retrain.,frame-review,Yes
 GET,/api/frame-review/status,Convlstm Status,"Batch counter of new satellite scans, the deployed ConvLSTM and the result of the last retrain.",frame-review,Yes
+GET,/api/retrain/status,"Deployed models, pending retrains and the retrain history of both models","Deployed versions, what is pending and the retrain history of the LSTM and the ConvLSTM.",retrain,Yes
 GET,/health,Health Check,ตรวจสอบว่า API server ทำงานปกติ,system,No

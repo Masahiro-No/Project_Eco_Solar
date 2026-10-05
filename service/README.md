@@ -17,7 +17,7 @@ service/
 ├── workers/
 │   ├── ingestion_worker.py       รอบดึงข้อมูล, สั่งพยากรณ์, เก็บผล, นับภาพใหม่เพื่อเริ่ม retrain ConvLSTM
 │   ├── inference_worker.py       งานพยากรณ์หนึ่งสถานี
-│   ├── satellite_preprocessor.py โหลดภาพ Himawari จริง 12 เฟรม (cache ใน MinIO) และตัดภาพดำทิ้ง
+│   ├── satellite_preprocessor.py โหลดภาพ Himawari จริง 12 เฟรม (cache ใน MinIO) ตัดภาพดำทิ้ง และเก็บภาพที่ ConvLSTM ทำนาย
 │   ├── cloud_coverage.py         สัดส่วนเมฆและความสว่างใน AOI, ดัชนีฟ้าใสจากภาพ, ระดับผลกระทบ
 │   ├── ghi_blend.py              รวมผล LSTM กับภาพดาวเทียมด้วยน้ำหนัก w(t)
 │   ├── decision.py               เป้าตามแดด, ΔP, ระดับการเตือน, กำลังสำรอง, แถบความไม่แน่นอน
@@ -29,10 +29,10 @@ service/
 │   ├── features.py               จัดข้อมูลลงช่อง 10 นาที สร้าง window และกันวันที่มี label ไว้ตรวจ
 │   ├── retrain_timeseries.py     fine-tune LSTM จาก label
 │   ├── retrain_convlstm.py       retrain ConvLSTM จากภาพจริง (--status, --backfill-days N, --run)
-│   ├── calibrate_satellite_ghi.py  fit ค่า a, b ของดัชนีฟ้าใสจากภาพกับ GHI ที่วัดจริง (--write)
+│   ├── calibrate_satellite_ghi.py  fit ค่า a, b ของดัชนีฟ้าใสจากภาพกับ GHI ที่วัดจริง (--write) หรือวัดความคลาดของสูตรเดิมรายสถานี (--check)
 │   └── backtest_cloud.py         ทดสอบย้อนหลังความแม่นของ % เมฆ
 ├── models/solar_lstm.py          โครงสร้าง LSTM (PyTorch) ที่ใช้ตอนเทรน; โครงสร้าง ConvLSTM อยู่ใน retrain_convlstm.py
-└── tests/                        ชุดทดสอบ 42 รายการ
+└── tests/                        ชุดทดสอบ 44 รายการ
 ```
 
 ## งานพยากรณ์หนึ่งรอบ (`run_inference`)
@@ -41,13 +41,14 @@ service/
 2. LSTM (ONNX) ให้ GHI 18 ก้าว
 3. ฝั่งดาวเทียม: ใช้เฟรมจริงล่าสุดและผลของ ConvLSTM (ONNX) คิดความสว่างใน AOI แล้วแปลงเป็นดัชนีฟ้าใสด้วยค่า calibration สถานะที่เป็นไปได้คือ `ok`, `shifted`, `observed_only`, `missing`, `low_sun`, `night`
 4. รวมผลด้วย `w(t) = 0.9·exp(−t/102)` แล้วคำนวณ P_gen, เป้า, ΔP และระดับการเตือน
-5. คืนผลให้ ingestion-worker บันทึกลงตาราง `predictions`
+5. เก็บ 18 ภาพที่ ConvLSTM ทำนายในรอบนั้นลง bucket `satellite-forecast` (เขียนทับของเดิม รอบที่ไม่มีภาพบันทึกว่า 0 ภาพ) ให้ตัวเล่นภาพเมฆบนหน้าเว็บ
+6. คืนผลให้ ingestion-worker บันทึกลงตาราง `predictions`
 
 ถ้าข้อมูลส่วนใดขาด worker บันทึกสถานะและเหตุผล ไม่สร้างค่าแทน
 
 ## Retrain
 
-เปิดปิดด้วย `ENABLE_RETRAIN` ใน `.env` ทั้งสองงานสำรองไฟล์เดิมไว้ที่ `model/<ชนิด>/backups/` และบันทึกผลใน MLflow
+เปิดปิดด้วย `ENABLE_RETRAIN` ใน `.env` ทั้งสองงานสำรองไฟล์เดิมไว้ที่ `model/<ชนิด>/backups/` และบันทึกผลทุกรอบใน MLflow พร้อมสถานะ เหตุผล และรุ่น ซึ่งหน้า *สถานะ retrain* อ่านไปแสดง
 
 | งาน | เริ่มเมื่อ | เกณฑ์รับโมเดลใหม่ |
 |---|---|---|

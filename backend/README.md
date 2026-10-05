@@ -19,6 +19,7 @@ backend/
 │   ├── dashboard/      สรุปทั้งระบบ รายสถานี และรายการแจ้งเตือน
 │   ├── label_studio/   รับค่า GHI ที่วัดจริง (กรอกหรืออัปโหลดไฟล์) เก็บใน Label Studio แล้วนัด retrain LSTM
 │   ├── frame_review/   ผู้ดูแลตรวจภาพดาวเทียมที่จะใช้ retrain ConvLSTM
+│   ├── retrain/        รุ่นที่ใช้งานอยู่ รอบที่รอ และประวัติ retrain ของทั้งสองโมเดล (อ่านจาก MLflow)
 │   ├── jobs/           ดูและจัดการคิวงานใน Redis
 │   └── storage/        bucket และไฟล์ใน MinIO
 └── scripts/            สคริปต์ตรวจระบบและดูแลข้อมูล (ดูด้านล่าง)
@@ -36,13 +37,14 @@ backend/
 | users | `GET /users`, `GET·PATCH·DELETE /users/{id}` | รายชื่อทั้งหมด: admin; รายคน: เจ้าของบัญชีหรือ admin |
 | stations | `GET /stations`, `GET /stations/{id}`, `GET /stations/nearest` | ผู้ใช้ที่ล็อกอิน |
 | stations | `POST`, `PUT`, `PATCH`, `DELETE /stations…`, `GET /stations/archived`, `PATCH /stations/{id}/restore` | admin |
-| ingestion | `GET /ingestion/status`, `/weather/{id}/recent`, `/satellite/{id}/frames`, `/satellite/{id}/latest.png` | ผู้ใช้ที่ล็อกอิน |
+| ingestion | `GET /ingestion/status`, `/weather/{id}/recent`, `/satellite/{id}/frames`, `/satellite/{id}/latest.png`, `/satellite/{id}/day-frames` | ผู้ใช้ที่ล็อกอิน |
 | ingestion | `POST /ingestion/trigger`, `POST /ingestion/catchup` | admin |
 | inference | `GET /inference/latest/{id}`, `/history/{id}`, `/predictions-by-date`, `/result/{job_id}` | ผู้ใช้ที่ล็อกอิน |
 | inference | `POST /inference/predict` | admin |
 | dashboard | `GET /dashboard/summary`, `/station/{id}`, `/alerts`, `/grafana-links` | ผู้ใช้ที่ล็อกอิน |
 | label-studio | `POST /label-studio/ground-truth/submit`, `/batch-submit`, `/upload/preview`, `/upload` และ projects, tasks, annotations | admin |
 | frame-review | `GET·POST /frame-review/frames`, `GET /frame-review/status` | admin |
+| retrain | `GET /retrain/status` | admin |
 | jobs | `GET /jobs/queues`, `/queues/{name}/jobs`, `GET·DELETE /jobs/{id}`, `POST /jobs/{id}/retry`, `DELETE /jobs/queues/{name}/clear` | admin |
 | storage | `GET·POST /storage/buckets`, `POST /storage/upload`, `GET /storage/download/{bucket}/{object}`, `PUT /storage/buckets/{bucket}/versioning` | admin |
 
@@ -56,7 +58,10 @@ backend/
 - **ข้อมูลป้อน LSTM** สร้างที่ `api/inference/weather_grid.py`: จัดแถวสภาพอากาศลงช่อง 10 นาที เติมช่องว่างไม่เกิน 20 นาที ถ้ายังมีช่องว่างจะไม่พยากรณ์และคืนเหตุผล (`gap_in_history`, `insufficient_history`, `stale_data`)
 - **ingestion-worker ใช้โค้ดโฟลเดอร์นี้** (สร้างข้อมูลป้อนโมเดลและบันทึกผลพยากรณ์) แก้ backend แล้วต้อง restart ทั้ง `api` และ `ingestion-worker`
 - **บัญชี admin** สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน จาก `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` ผู้ที่สมัครเองได้ role `operator` เสมอ
-- **ป้ายสูตรแสงของสถานี** ฟิลด์ `sat_calibration_verified` ในผลพยากรณ์ อ่านจากรายชื่อ `stations` ใน `model/satellite/ghi_calibration.json`
+- **กราฟทั้งวัน** `GET /inference/predictions-by-date?lead_minutes=N` คืนค่าพยากรณ์ของทั้งวันสำหรับหน้าระบบพยากรณ์: ช่องเวลาที่ผ่านมาแล้วใช้รอบล่าสุดที่ทำนายล่วงหน้าอย่างน้อย N นาที (ต่างได้ไม่เกิน 20 นาที) ช่องเวลาในอนาคตใช้รอบล่าสุด พร้อม MAE เทียบค่าวัดจริงที่ระยะนั้น
+- **ภาพเมฆรายวัน** `GET /ingestion/satellite/{id}/day-frames` คืนภาพจริงของวัน และสำหรับวันนี้ ภาพที่ ConvLSTM ทำนายในรอบล่าสุดจาก bucket `satellite-forecast`
+- **สำเนาค่าวัดจริงในหน่วยความจำ** การอ่าน label ทั้งหมดจาก Label Studio ใช้ 10–30 วินาที `api/label_studio/ground_truth.py` จึงเก็บสำเนาไว้ (ใช้ได้ทันที 2 นาที, ใช้พร้อมอ่านใหม่เบื้องหลังได้ถึง 1 ชั่วโมง) ค่าที่บันทึกผ่าน API เข้าสำเนาทันที การบันทึกยังอ่านจาก Label Studio ใหม่ก่อนเขียนเสมอเพื่อไม่ให้เกิด task ซ้ำ
+- **ป้ายสูตรแสงของสถานี** ฟิลด์ `sat_calibration_verified` และ `sat_calibration_check` ในผลพยากรณ์ อ่านจาก `stations` (สถานีที่ใช้ fit) และ `checked` (สถานีที่เทียบแล้ว) ใน `model/satellite/ghi_calibration.json`
 
 ## รัน
 
