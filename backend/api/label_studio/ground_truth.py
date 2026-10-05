@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
@@ -126,10 +128,37 @@ def make_annotation_result(ghi: float) -> list[dict[str, Any]]:
     return [{"value": {"number": ghi}, "from_name": "ghi", "to_name": "station", "type": "number"}]
 
 
+# Reading every label from Label Studio takes 10-30 seconds, so the API keeps what it read:
+#   younger than LABEL_CACHE_SECONDS      answered from memory
+#   older, up to LABEL_CACHE_MAX_SECONDS  answered from memory while a background thread reads again
+#   older than that, or nothing read yet  read before answering (an unreachable Label Studio shows as an error)
+# Labels saved through this API go into the memory copy at once. A value edited directly in Label Studio
+# shows up after the next read.
+LABEL_CACHE_SECONDS = 120
+LABEL_CACHE_MAX_SECONDS = 3600
+_cache: dict[str, Any] = {"labels": None, "at": 0.0, "project_id": None, "refreshing": False}
+_cache_lock = threading.Lock()  # one full read at a time
+
+
+def clear_label_cache() -> None:
+    """Forget what was read from Label Studio (next read goes to Label Studio)."""
+    _cache.update(labels=None, at=0.0, project_id=None, refreshing=False)
+
+
+def warm_label_cache() -> None:
+    """Read the labels once at API start so the first page does not wait for it (errors are left for that page)."""
+    try:
+        store = GroundTruthStore()
+        store._all_labels(store.project_id(), fresh=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class GroundTruthStore:
     """อ่าน/เขียน label ผ่าน Label Studio API (ใช้ LabelStudioService เดิม)."""
 
     def __init__(self, svc: Any = None) -> None:
+        self._cached = svc is None  # a service passed in by the caller is read every time
         if svc is None:
             from api.label_studio.service import LabelStudioService
 
@@ -137,27 +166,76 @@ class GroundTruthStore:
         self.svc = svc
 
     def project_id(self) -> int:
+        if self._cached and _cache["project_id"] is not None and _cache["labels"] is not None:
+            return _cache["project_id"]
         from api.label_studio.controller import CONFIG_TEMPLATES
 
-        return self.svc.get_or_create_project(GHI_PROJECT_TITLE, CONFIG_TEMPLATES["solar_ghi_verify"]).id
+        pid = self.svc.get_or_create_project(GHI_PROJECT_TITLE, CONFIG_TEMPLATES["solar_ghi_verify"]).id
+        if self._cached:
+            _cache["project_id"] = pid
+        return pid
 
-    def index(self, project_id: int, station_id: str, start: datetime, end: datetime) -> dict[datetime, StoredLabel]:
-        """label ของสถานีในช่วง [start, end) -> {ช่องเวลา: StoredLabel}."""
-        out: dict[datetime, StoredLabel] = {}
+    def _read_all(self, project_id: int) -> dict[tuple[str, datetime], StoredLabel]:
+        """Every label of the project from Label Studio -> {(station, slot): StoredLabel}."""
+        out: dict[tuple[str, datetime], StoredLabel] = {}
         for t in self.svc.list_tasks_with_annotations(project_id):
             data = _get(t, "data", {}) or {}
-            if data.get("station_id") != station_id or not data.get("timestamp"):
+            if not data.get("station_id") or not data.get("timestamp"):
                 continue
             try:
                 slot = parse_label_timestamp(data["timestamp"])
             except ValueError:
                 continue
-            if not (start <= slot < end):
-                continue
             ghi, ann_id = task_ghi(t)
             if ghi is not None:
-                out[slot] = StoredLabel(task_id=int(_get(t, "id")), annotation_id=ann_id, ghi=ghi)
+                out[(data["station_id"], slot)] = StoredLabel(task_id=int(_get(t, "id")), annotation_id=ann_id, ghi=ghi)
         return out
+
+    def _refresh_in_background(self, project_id: int) -> None:
+        if _cache["refreshing"]:
+            return
+        _cache["refreshing"] = True
+
+        def run() -> None:
+            try:
+                with _cache_lock:
+                    labels = self._read_all(project_id)
+                    _cache.update(labels=labels, at=time.monotonic())
+            except Exception:  # noqa: BLE001  keep what we have; past LABEL_CACHE_MAX_SECONDS the error reaches the page
+                pass
+            finally:
+                _cache["refreshing"] = False
+
+        threading.Thread(target=run, name="label-cache-refresh", daemon=True).start()
+
+    def _all_labels(self, project_id: int, fresh: bool) -> dict[tuple[str, datetime], StoredLabel]:
+        if not self._cached:
+            return self._read_all(project_id)
+        labels, age = _cache["labels"], time.monotonic() - _cache["at"]
+        if labels is not None and not fresh:
+            if age < LABEL_CACHE_SECONDS:
+                return labels
+            if age < LABEL_CACHE_MAX_SECONDS:
+                self._refresh_in_background(project_id)
+                return labels
+        with _cache_lock:
+            if not fresh and _cache["labels"] is not None and time.monotonic() - _cache["at"] < LABEL_CACHE_SECONDS:
+                return _cache["labels"]  # another request read it while this one waited
+            labels = self._read_all(project_id)
+            _cache.update(labels=labels, at=time.monotonic())
+            return labels
+
+    def _remember(self, station_id: str, slot: datetime, label: StoredLabel) -> None:
+        if self._cached and _cache["labels"] is not None:
+            _cache["labels"][(station_id, slot)] = label
+
+    def index(self, project_id: int, station_id: str, start: datetime, end: datetime, fresh: bool = False) -> dict[datetime, StoredLabel]:
+        """label ของสถานีในช่วง [start, end) -> {ช่องเวลา: StoredLabel}. fresh=True อ่านจาก Label Studio ใหม่เสมอ."""
+        return {
+            slot: label
+            for (sid, slot), label in self._all_labels(project_id, fresh).items()
+            if sid == station_id and start <= slot < end
+        }
 
     def upsert(self, station_id: str, rows: list[tuple[int, datetime, float, dict[str, Any]]]) -> UpsertSummary:
         """rows = [(index, slot, ghi, extra)] ที่ผ่าน validation แล้ว. ช่องเวลาที่มีอยู่แล้ว -> อัปเดต, ไม่มี -> สร้าง."""
@@ -166,7 +244,8 @@ class GroundTruthStore:
             return summary
         pid = self.project_id()
         slots = [r[1] for r in rows]
-        existing = self.index(pid, station_id, min(slots), max(slots) + timedelta(seconds=1))
+        # read from Label Studio itself before writing: a slot that already has a task must be updated, not duplicated
+        existing = self.index(pid, station_id, min(slots), max(slots) + timedelta(seconds=1), fresh=True)
 
         for index, slot, ghi, extra in rows:
             data = make_task_data(station_id, slot, ghi, extra)
@@ -176,6 +255,7 @@ class GroundTruthStore:
                     task = self.svc.create_task(pid, data)
                     ann = self.svc.create_annotation(task_id=task.id, result=make_annotation_result(ghi), ground_truth=True)
                     summary.items.append(ItemResult(index, "created", task_id=task.id, annotation_id=ann.id))
+                    self._remember(station_id, slot, StoredLabel(task_id=int(task.id), annotation_id=ann.id, ghi=ghi))
                 elif abs(cur.ghi - ghi) < 1e-6:
                     summary.items.append(ItemResult(index, "unchanged", task_id=cur.task_id, annotation_id=cur.annotation_id))
                 else:
@@ -191,6 +271,7 @@ class GroundTruthStore:
                     else:
                         self.svc.update_annotation(ann_id, make_annotation_result(ghi), ground_truth=True)
                     summary.items.append(ItemResult(index, "updated", task_id=cur.task_id, annotation_id=ann_id))
+                    self._remember(station_id, slot, StoredLabel(task_id=cur.task_id, annotation_id=ann_id, ghi=ghi))
             except Exception as e:  # noqa: BLE001
                 summary.items.append(ItemResult(index, "rejected", reason=f"label_studio_error: {e}"))
         return summary

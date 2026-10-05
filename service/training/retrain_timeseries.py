@@ -503,7 +503,7 @@ def execute_timeseries_retrain(
         old_mae, new_mae = plain_before, plain_after
 
         if reason is not None:
-            _log_mlflow(summary, deployed=False)
+            _log_mlflow(summary, deployed=False, reason=reason)
             return {"status": "rejected", "reason": reason, **summary}
 
         # 6. export + ตรวจ + สำรอง + deploy
@@ -548,7 +548,7 @@ def execute_timeseries_retrain(
         client.fput_object(MINIO_BUCKET, f"{MINIO_PREFIX}/solar_ghi_lstm.onnx", str(MODELS_DIR / "solar_ghi_lstm.onnx"))
         client.fput_object(MINIO_BUCKET, f"{MINIO_PREFIX}/model_meta.json", str(MODELS_DIR / "model_meta.json"))  # meta ขึ้นทีหลังสุด
 
-        _log_mlflow(summary, deployed=True)
+        _log_mlflow(summary, deployed=True, version=new_meta["version"])
         logger.info(f">> DEPLOYED v{new_meta['version']} val_mae {old_mae:.2f} -> {new_mae:.2f}")
         return {
             "status": "deployed",
@@ -572,7 +572,7 @@ def execute_timeseries_retrain(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def _log_mlflow(summary: dict[str, Any], deployed: bool) -> None:
+def _log_mlflow(summary: dict[str, Any], deployed: bool, reason: Optional[str] = None, version: Optional[str] = None) -> None:
     """บันทึกผลลง MLflow แบบ best-effort (ล้มเหลวไม่กระทบการ retrain)."""
     try:
         import mlflow
@@ -586,5 +586,10 @@ def _log_mlflow(summary: dict[str, Any], deployed: bool) -> None:
                 mlflow.set_tag("holdout_day", summary["holdout_day"])
             mlflow.set_tag("gate", summary["gate"])
             mlflow.set_tag("deployed", str(deployed))
+            mlflow.set_tag("status", "deployed" if deployed else "rejected")
+            if reason:
+                mlflow.set_tag("reason", reason)
+            if version:
+                mlflow.set_tag("version", str(version))
     except Exception as e:  # noqa: BLE001
         logger.warning(f"MLflow logging skipped: {e}")

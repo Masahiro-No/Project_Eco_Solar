@@ -32,6 +32,7 @@ PENDING_KEY = "solar:inference:pending"
 META_PREFIX = "solar:inference:meta:"
 PENDING_TTL_SECONDS = 2 * 3600
 GIVE_UP_AFTER = timedelta(minutes=30)
+LEAD_SLACK_MINUTES = 20        # day view: a past slot accepts a forecast made up to this much earlier than the lead asked for
 
 
 @dataclass
@@ -403,39 +404,53 @@ class InferenceService:
         return [_to_schema(pred, station_name) for pred, station_name in rows]
 
     @staticmethod
-    async def get_aligned_predictions(station_id: str, day: date, db: AsyncSession) -> dict:
+    async def get_aligned_predictions(
+        station_id: str, day: date, db: AsyncSession, lead_minutes: Optional[int] = None, now: Optional[datetime] = None
+    ) -> dict:
         """ค่าที่โมเดลพยากรณ์ไว้ จัดเรียงตามเวลาจริงของวัน (เวลาไทย) ที่เลือก — ใช้เฉพาะผลจากโมเดลจริง (source='model').
 
         เวลาของจุดที่ i ในเส้นพยากรณ์ = data_time (เวลาของข้อมูลล่าสุดที่ป้อนโมเดล) + (i+1)*ระยะห่างของจุด
         แถวที่ไม่มี data_time ใช้ช่องข้อมูลล่าสุดใน weather_history ที่ไม่เกิน predicted_at แทน
         ช่องเวลาเดียวกันที่ถูกพยากรณ์หลายรอบ ใช้รอบที่ origin ใหม่ที่สุด.
         pred = เส้นพยากรณ์สุดท้าย (LSTM รวมกับภาพดาวเทียม), pred_lstm = LSTM อย่างเดียวของรอบเดียวกัน
-        Returns: {"pred": {slot: ghi}, "pred_lstm": {slot: ghi}, "weather": {slot: ghi}, "runs": n}
+
+        view = เส้นสำหรับกราฟทั้งวัน: ช่องเวลาที่ผ่านมาแล้วใช้รอบล่าสุดที่ทำนายไว้ล่วงหน้าอย่างน้อย lead_minutes
+        (ไม่เกิน lead_minutes + LEAD_SLACK_MINUTES เพราะรอบพยากรณ์ไม่ได้เริ่มทุกช่อง 10 นาที) ถ้าไม่มี ใช้รอบที่ล่วงหน้า
+        น้อยกว่าได้ไม่เกิน LEAD_SLACK_MINUTES (ที่ 180 นาทีไม่มีรอบที่ล่วงหน้ามากกว่า); ไม่มีทั้งสองแบบ = ไม่มีค่า
+        ช่องเวลาในอนาคตใช้รอบล่าสุด; ไม่ระบุ lead_minutes = รอบล่าสุดทุกช่อง. ค่า lead ของแต่ละจุดคือระยะล่วงหน้าจริง
+
+        Returns: {"pred": {slot: ghi}, "pred_lstm": {slot: ghi}, "weather": {slot: ghi}, "clearsky": {slot: ghi},
+                  "view": {slot: {"ghi", "lstm", "lead", "target", "cloud", "loss"}}, "runs": n}
         """
         from api.label_studio.ground_truth import floor_slot, th_day_bounds
 
         step = timedelta(minutes=STEP_MINUTES)
         start, end = th_day_bounds(day)
         lead = step * 18
+        now = _as_utc(now) if now is not None else datetime.now(timezone.utc)
 
         def nearest_slot(dt: datetime) -> datetime:  # ข้อมูล weather: ใกล้สุด (กึ่งกลางปัดขึ้น)
             return floor_slot(_as_utc(dt) + step / 2)
 
         w_res = await db.execute(
-            select(WeatherHistory.timestamp, WeatherHistory.ghi)
+            select(WeatherHistory.timestamp, WeatherHistory.ghi, WeatherHistory.clearsky_ghi)
             .where(WeatherHistory.station_id == station_id, WeatherHistory.timestamp >= start - lead, WeatherHistory.timestamp < end)
             .order_by(WeatherHistory.timestamp)
         )
         weather: dict[datetime, float] = {}
-        for ts, ghi in w_res.all():
+        clearsky: dict[datetime, float] = {}
+        for ts, ghi, cs in w_res.all():
             if ghi is not None:
                 weather[nearest_slot(ts)] = float(ghi)
+            if cs is not None:
+                clearsky[nearest_slot(ts)] = float(cs)
         w_slots = sorted(weather)
 
         p_res = await db.execute(
             select(
                 Prediction.predicted_at, Prediction.data_time, Prediction.ghi_forecast_curve,
                 Prediction.forecast_horizon_hours, Prediction.ghi_forecast_lstm_raw,
+                Prediction.target_profile_kw, Prediction.cloud_coverage_pct, Prediction.sat_ghi_loss_pct,
             )
             .where(
                 Prediction.station_id == station_id,
@@ -445,11 +460,16 @@ class InferenceService:
             )
             .order_by(Prediction.predicted_at)
         )
-        pred: dict[datetime, tuple[datetime, float, Optional[float]]] = {}
+
+        def at(values: Optional[list], k: int) -> Optional[float]:
+            return float(values[k]) if values and k < len(values) and values[k] is not None else None
+
+        newest: dict[datetime, tuple[datetime, dict]] = {}   # slot -> (origin, values) of the newest run
+        at_lead: dict[datetime, tuple[datetime, dict]] = {}  # slot -> newest run made at least lead_minutes earlier
+        near_lead: dict[datetime, tuple[datetime, dict]] = {}  # slot -> oldest run made a little less than lead_minutes earlier
         runs = 0
-        for predicted_at, data_time, curve, horizon_hours, lstm_curve in p_res.all():
+        for predicted_at, data_time, curve, horizon_hours, lstm_curve, target, cloud, loss in p_res.all():
             curve = curve or []
-            lstm_curve = lstm_curve or []
             if not curve:
                 continue
             if data_time is not None:
@@ -462,15 +482,34 @@ class InferenceService:
             used = False
             for k, value in enumerate(curve):
                 slot = origin + gap * (k + 1)
-                if start <= slot < end and (slot not in pred or origin >= pred[slot][0]):
-                    lstm_value = lstm_curve[k] if k < len(lstm_curve) and lstm_curve[k] is not None else None
-                    pred[slot] = (origin, float(value), None if lstm_value is None else float(lstm_value))
+                if not (start <= slot < end):
+                    continue
+                values = {
+                    "ghi": float(value), "lstm": at(lstm_curve, k), "lead": int((slot - origin).total_seconds() // 60),
+                    "target": at(target, k), "cloud": at(cloud, k), "loss": at(loss, k),
+                }
+                if slot not in newest or origin >= newest[slot][0]:
+                    newest[slot] = (origin, values)
                     used = True
+                if lead_minutes is not None and lead_minutes <= values["lead"] <= lead_minutes + LEAD_SLACK_MINUTES:
+                    if slot not in at_lead or origin >= at_lead[slot][0]:
+                        at_lead[slot] = (origin, values)
+                elif lead_minutes is not None and lead_minutes - LEAD_SLACK_MINUTES <= values["lead"] < lead_minutes:
+                    if slot not in near_lead or origin <= near_lead[slot][0]:
+                        near_lead[slot] = (origin, values)
             runs += 1 if used else 0
 
+        if lead_minutes is None:
+            view = {s: v for s, (_, v) in newest.items()}
+        else:  # past: the newest forecast made at least lead_minutes earlier; future: the newest forecast
+            view = {s: v for s, (_, v) in {**near_lead, **at_lead}.items() if s <= now}
+            view.update({s: v for s, (_, v) in newest.items() if s > now})
+
         return {
-            "pred": {s: v for s, (_, v, _l) in pred.items()},
-            "pred_lstm": {s: lv for s, (_, _v, lv) in pred.items() if lv is not None},
+            "pred": {s: v["ghi"] for s, (_, v) in newest.items()},
+            "pred_lstm": {s: v["lstm"] for s, (_, v) in newest.items() if v["lstm"] is not None},
             "weather": {s: g for s, g in weather.items() if start <= s < end},
+            "clearsky": {s: g for s, g in clearsky.items() if start <= s < end},
+            "view": view,
             "runs": runs,
         }

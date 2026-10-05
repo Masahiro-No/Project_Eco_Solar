@@ -61,6 +61,13 @@ class AlignedForecastPoint(BaseModel):
     predicted_ghi_lstm: Optional[float] = Field(None, description="ค่าพยากรณ์ของ LSTM อย่างเดียวในรอบเดียวกัน")
     weather_ghi: Optional[float] = Field(None, description="GHI ใน weather_history (ค่าประมาณจาก API)")
     label_ghi: Optional[float] = Field(None, description="GHI จริงที่ label ไว้แล้วใน Label Studio")
+    clearsky_ghi: Optional[float] = Field(None, description="GHI กรณีฟ้าใสของช่องเวลานี้ (จาก weather_history)")
+    forecast_ghi: Optional[float] = Field(None, description="เส้นสำหรับกราฟทั้งวัน: อดีต = รอบล่าสุดที่ทำนายล่วงหน้าอย่างน้อย lead_minutes, อนาคต = รอบล่าสุด")
+    forecast_ghi_lstm: Optional[float] = Field(None, description="LSTM อย่างเดียวของรอบเดียวกับ forecast_ghi")
+    forecast_lead_minutes: Optional[int] = Field(None, description="forecast_ghi ถูกทำนายไว้ล่วงหน้ากี่นาที")
+    forecast_target_kw: Optional[float] = Field(None, description="เป้ากำลังผลิตของช่องเวลานี้ในรอบเดียวกัน")
+    forecast_cloud_pct: Optional[float] = Field(None, description="% เมฆใน AOI ที่ทำนายไว้ในรอบเดียวกัน")
+    forecast_sat_loss_pct: Optional[float] = Field(None, description="แสงที่คาดว่าลด (%) จากฝั่งดาวเทียมในรอบเดียวกัน")
 
 
 class PredictionsByDateResponse(BaseModel):
@@ -73,5 +80,9 @@ class PredictionsByDateResponse(BaseModel):
     mae_vs_label: Optional[float] = None
     mae_lstm_vs_label: Optional[float] = Field(None, description="MAE ของ LSTM อย่างเดียว บนช่องเวลาเดียวกับ mae_vs_label")
     label_error: Optional[str] = Field(None, description="ถ้าอ่าน label จาก Label Studio ไม่ได้ จะบอกสาเหตุที่นี่")
+    lead_minutes: Optional[int] = Field(None, description="ระยะพยากรณ์ที่ขอสำหรับกราฟทั้งวัน (null = รอบล่าสุดทุกช่อง)")
+    view_matched_label_count: int = Field(0, description="ช่องเวลาที่ผ่านมาแล้วซึ่งมีทั้ง forecast_ghi และค่าจริง")
+    view_mae_vs_label: Optional[float] = Field(None, description="MAE ของ forecast_ghi เทียบกับค่าจริง ที่ระยะพยากรณ์ที่ขอ")
+    view_mae_lstm_vs_label: Optional[float] = Field(None, description="MAE ของ LSTM อย่างเดียว บนช่องเวลาเดียวกัน")
     points: list[AlignedForecastPoint]
 

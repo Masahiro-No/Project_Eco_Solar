@@ -197,6 +197,7 @@ def check_store_upsert():
 
 async def check_http_flow():
     FakeLS.reset()
+    gt.clear_label_cache()
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -252,6 +253,24 @@ async def check_http_flow():
         assert body["prediction_runs"] == 2 and body["label_count"] == 0 and body["label_error"] is None
         assert all(p["predicted_ghi"] != 999.0 for p in body["points"]), "แถว source ว่างต้องไม่ถูกใช้"
 
+        # --- กราฟทั้งวัน: ช่องเวลาที่ผ่านมาแล้วใช้รอบล่าสุดที่ทำนายล่วงหน้าอย่างน้อยตามระยะที่ขอ (รอบ 12:00 = 100+i, รอบ 12:30 = 200+i)
+        day = {"station_id": "ST-001", "date": "2026-10-02"}
+        r = await c.get("/api/inference/predictions-by-date", params={**day, "lead_minutes": 60})
+        assert r.status_code == 200, r.text
+        v = {p["timestamp"][11:16]: p for p in r.json()["points"]}
+        assert v["06:00"]["forecast_ghi"] == 105.0 and v["06:00"]["forecast_lead_minutes"] == 60, "13:00 = รอบ 12:00 ล่วงหน้า 60 นาที"
+        assert v["06:30"]["forecast_ghi"] == 205.0, "13:30 = รอบ 12:30 ล่วงหน้า 60 นาที"
+        assert v["05:40"]["forecast_ghi"] == 103.0 and v["05:40"]["forecast_lead_minutes"] == 40, "12:40 ไม่มีรอบที่ล่วงหน้าถึง 60 นาที ใช้รอบ 12:00 (40 นาที)"
+        assert v["05:30"]["forecast_ghi"] is None and v["05:40"]["predicted_ghi"] == 200.0, "12:30 มีแต่รอบที่ล่วงหน้า 30 นาที ห่างจาก 60 เกินไป"
+        assert v["06:40"]["forecast_ghi"] == 206.0 and v["06:40"]["forecast_lead_minutes"] == 70, "13:40 = รอบ 12:30 (70 นาที) ไม่ใช่รอบ 12:00 ที่เก่ากว่า"
+        assert v["05:40"]["clearsky_ghi"] == 900.0 and r.json()["lead_minutes"] == 60
+        r = await c.get("/api/inference/predictions-by-date", params={**day, "lead_minutes": 10})
+        v = {p["timestamp"][11:16]: p for p in r.json()["points"]}
+        assert (v["05:10"]["forecast_ghi"], v["05:40"]["forecast_ghi"], v["05:20"]["forecast_ghi"]) == (100.0, 200.0, 101.0)
+        assert v["05:20"]["forecast_lead_minutes"] == 20, "12:20 ไม่มีรอบที่เริ่ม 12:10 จึงใช้รอบ 12:00 และบอกระยะจริง"
+        r = await c.get("/api/inference/predictions-by-date", params={**day, "lead_minutes": 15})
+        assert r.status_code == 422, "ระยะพยากรณ์ต้องเป็นทวีคูณของ 10 นาที"
+
         # --- ส่ง label แบบแก้เอง (เวลาไทย ไม่มี tz; 12:44 -> ปัดลง 12:40)
         pool.keys.clear()
         r = await c.post("/api/label-studio/ground-truth/batch-submit", json={"station_id": "ST-001", "source": "manual", "items": [
@@ -279,6 +298,9 @@ async def check_http_flow():
         k40 = [v for t, v in by.items() if t.startswith("2026-10-02T05:40")][0]
         assert k40["label_ghi"] == 260.0 and k40["predicted_ghi"] == 200.0
         assert body["label_count"] == 2 and body["matched_label_count"] == 1 and body["mae_vs_label"] == 60.0
+        # ความคลาดเคลื่อนที่ระยะที่ขอ: ช่อง 12:40 มีค่าจริง 260 และค่าที่ทำนายล่วงหน้า 10 นาที = 200 (ไม่มีเส้น LSTM จึงไม่นับ)
+        r = await c.get("/api/inference/predictions-by-date", params={**day, "lead_minutes": 10})
+        assert r.json()["view_matched_label_count"] == 0 and r.json()["view_mae_vs_label"] is None
         k1730 = [v for t, v in by.items() if t.startswith("2026-10-02T10:30")][0]
         assert k1730["label_ghi"] == 10.0 and k1730["predicted_ghi"] is None
 
@@ -325,6 +347,7 @@ async def check_http_flow():
                 raise RuntimeError("401 token expired")
 
         ls_service.LabelStudioService = Broken
+        gt.clear_label_cache()  # ไม่มีสำเนาในหน่วยความจำ (เช่น API เพิ่งเริ่ม): ต้องเห็นข้อผิดพลาดของ Label Studio
         r = await c.get("/api/inference/predictions-by-date", params={"station_id": "ST-001", "date": "2026-10-02"})
         assert r.status_code == 200 and "token expired" in r.json()["label_error"] and r.json()["points"]
         r = await c.post("/api/label-studio/ground-truth/batch-submit", json={"station_id": "ST-001", "items": [{"timestamp": "2026-10-02T13:30:00", "ghi_actual": 1.0}]})

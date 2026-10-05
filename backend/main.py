@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import os
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +21,9 @@ from api.frame_review.router import router as frame_review_router
 from api.inference.router import router as inference_router
 from api.ingestion.router import router as ingestion_router
 from api.jobs.router import router as jobs_router
+from api.label_studio.ground_truth import warm_label_cache
 from api.label_studio.router import router as label_studio_router
+from api.retrain.router import router as retrain_router
 from api.stations.router import router as stations_router
 from api.storage.router import router as storage_router
 from api.users.router import router as users_router
@@ -83,6 +86,9 @@ async def lifespan(_: FastAPI):
     # Gaps in weather and satellite data are healed by the ingestion worker in every 10-minute round.
     # The API does not run that catch-up itself: its downloads would block request handling after a restart.
 
+    # Reading every label from Label Studio takes 10-30 s: do it once now, in a thread, so the first page does not wait.
+    threading.Thread(target=warm_label_cache, name="label-cache-warm", daemon=True).start()
+
     yield
 
 
@@ -122,6 +128,7 @@ app.include_router(jobs_router, prefix="/api")
 app.include_router(inference_router, prefix="/api")
 app.include_router(ingestion_router, prefix="/api")
 app.include_router(frame_review_router, prefix="/api")
+app.include_router(retrain_router, prefix="/api")
 
 # ── Instrument FastAPI — สร้าง Span & Metrics อัตโนมัติทุก HTTP Request ─────
 FastAPIInstrumentor.instrument_app(
