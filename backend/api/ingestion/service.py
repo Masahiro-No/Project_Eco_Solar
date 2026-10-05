@@ -25,6 +25,8 @@ SATELLITE_BUCKET = "satellite-cache"
 # Open-Meteo answers in km/h unless told otherwise; the LSTM was trained on m/s (NSRDB), so every request asks for m/s.
 # Rows stored before 5 Oct 2026 were km/h and were converted once with scripts/convert_wind_speed_to_ms.py.
 OPEN_METEO_WIND_UNIT = "wind_speed_unit=ms"
+# DHI is Open-Meteo's diffuse_radiation since the evening of 5 Oct 2026. Before that the catch-up rows held
+# GHI - DNI x cos(zenith) and the live rows held no DHI; those rows are kept as they were stored.
 
 
 NICT_B03_BASE_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03"
@@ -456,8 +458,7 @@ class IngestionService:
             else:
                 ghi = raw_ghi
                 dni = max(0.0, float(row["direct_normal_irradiance"]))
-                cos_z = max(0.01, math.cos(math.radians(solar.zenith_degrees)))
-                dhi = max(0.0, ghi - dni * cos_z)
+                dhi = max(0.0, float(row["diffuse_radiation"]))
 
             record = WeatherHistory(
                 station_id=station.id,

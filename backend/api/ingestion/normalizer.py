@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.ingestion.solar_calculator import SolarCalculator
@@ -8,7 +8,7 @@ from api.ingestion.solar_calculator import SolarCalculator
 # them: a missing value is never replaced by a constant.
 OPEN_METEO_VARIABLES = (
     "temperature_2m", "relative_humidity_2m", "surface_pressure", "wind_speed_10m", "cloud_cover",
-    "direct_normal_irradiance", "shortwave_radiation",
+    "direct_normal_irradiance", "diffuse_radiation", "shortwave_radiation",
 )
 OPEN_METEO_STEP_MINUTES = 15  # spacing of the minutely_15 values
 
@@ -23,7 +23,7 @@ class CanonicalWeatherRecord(BaseModel):
     station_id: str
     ghi: float = Field(..., description="Global Horizontal Irradiance in W/m^2")
     dni: float = Field(..., description="Direct Normal Irradiance in W/m^2")
-    dhi: Optional[float] = Field(default=None, description="Diffuse Horizontal Irradiance in W/m^2")
+    dhi: float = Field(..., description="Diffuse Horizontal Irradiance in W/m^2")
     clearsky_ghi: float = Field(..., description="Calculated Clear-Sky GHI in W/m^2 (Haurwitz model)")
     clearsky_index: float = Field(..., description="Clear-Sky Index k_c = GHI / Clearsky_GHI (range 0.0-1.2)")
     solar_zenith_angle: float = Field(..., description="Solar Zenith Angle in degrees (0 = overhead, 90 = horizon)")
@@ -51,8 +51,6 @@ class WeatherDataNormalizer:
 
         dt = datetime.fromisoformat(current["time"]).replace(tzinfo=timezone.utc)
         ghi = float(current["shortwave_radiation"])
-        # not asked for in the request, so normally absent: stored as empty, not as 0
-        dhi = float(current["diffuse_radiation"]) if current.get("diffuse_radiation") is not None else None
 
         # Universal astronomical solar calculations
         solar = SolarCalculator.get_solar_metrics(lat=lat, lon=lon, dt_utc=dt, measured_ghi=ghi)
@@ -62,7 +60,7 @@ class WeatherDataNormalizer:
             station_id=station_id,
             ghi=ghi,
             dni=float(current["direct_normal_irradiance"]),
-            dhi=dhi,
+            dhi=float(current["diffuse_radiation"]),
             clearsky_ghi=solar.clearsky_ghi,
             clearsky_index=solar.clearsky_index,
             solar_zenith_angle=solar.zenith_degrees,

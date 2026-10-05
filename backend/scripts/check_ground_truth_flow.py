@@ -475,9 +475,10 @@ def check_weather_ingestion():
 
     # รอบสด: ครบทุกค่าจึงได้แถว; ขาดหรือเป็น null แม้ค่าเดียว ไม่มีแถว
     current = {"time": "2026-10-05T03:15", "temperature_2m": 31.2, "relative_humidity_2m": 64, "surface_pressure": 1006.4,
-               "wind_speed_10m": 2.1, "cloud_cover": 40, "direct_normal_irradiance": 512.0, "shortwave_radiation": 640.0}
+               "wind_speed_10m": 2.1, "cloud_cover": 40, "direct_normal_irradiance": 512.0, "diffuse_radiation": 228.0,
+               "shortwave_radiation": 640.0}
     rec = WeatherDataNormalizer.normalize_open_meteo({"current": current}, "ST-TEST-99", lat=7.0, lon=100.5)
-    assert (rec.temperature, rec.relative_humidity, rec.surface_pressure, rec.dhi) == (31.2, 64.0, 1006.4, None)
+    assert (rec.temperature, rec.relative_humidity, rec.surface_pressure, rec.dhi) == (31.2, 64.0, 1006.4, 228.0)   # DHI คือค่าของ Open-Meteo
     assert rec.timestamp == datetime(2026, 10, 5, 3, 15, tzinfo=timezone.utc)
     for key in ("time",) + OPEN_METEO_VARIABLES:
         for broken in ({k: v for k, v in current.items() if k != key}, {**current, key: None}):
