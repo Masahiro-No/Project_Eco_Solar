@@ -38,8 +38,13 @@ GENERATED_ACCOUNT = re.compile(r"^(user|user_e2e|tester)_\d{9,}@solar\.internal$
 TEST_BUCKET = re.compile(r"^test-bucket-\d+$")
 TEST_STATION_LIKE = "ST-TEST-%"
 SATELLITE_BUCKET = "satellite-cache"
-# ตารางที่อ้างถึง stations.id ต้องลบก่อนตัวสถานี
-STATION_TABLES = ("predictions", "weather_history", "satellite_frames", "satellite_frame_reviews", "ground_truth_labels")
+# ตารางที่มี foreign key ไปยัง stations.id (ต้องลบแถวก่อนตัวสถานี) อ่านจากฐานข้อมูลเอง ไม่เขียนชื่อตายตัว
+STATION_FK_SQL = """
+    select c.conrelid::regclass::text, a.attname
+    from pg_constraint c join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+    where c.contype = 'f' and c.confrelid = 'stations'::regclass
+    order by 1
+"""
 
 
 def _say(line: str = "") -> None:
@@ -98,16 +103,17 @@ async def plan_predictions(db) -> int:
     return total
 
 
-async def plan_stations(db, client) -> tuple[list[str], dict[str, int], list[str]]:
+async def plan_stations(db, client) -> tuple[list[str], dict[tuple[str, str], int], list[str]]:
     stations = (await db.execute(text("select id, name, is_active from stations where id like :p order by id"), {"p": TEST_STATION_LIKE})).all()
     ids = [s[0] for s in stations]
     _say("[stations] สถานีทดสอบและข้อมูลที่ผูกอยู่")
     for sid, name, active in stations:
         _say(f"  {sid}  {name}  ({'เปิดใช้' if active else 'ปิดใช้'})")
-    counts: dict[str, int] = {}
-    for table in STATION_TABLES:
-        counts[table] = (await db.execute(text(f"select count(*) from {table} where station_id like :p"), {"p": TEST_STATION_LIKE})).scalar_one()
-        _say(f"    {table:<26} {counts[table]:>6} แถว")
+    counts: dict[tuple[str, str], int] = {}
+    for table, column in (await db.execute(text(STATION_FK_SQL))).all():
+        n = (await db.execute(text(f"select count(*) from {table} where {column} like :p"), {"p": TEST_STATION_LIKE})).scalar_one()
+        counts[(table, column)] = n
+        _say(f"    {table:<26} {n:>6} แถว")
     objects: list[str] = []
     if client.bucket_exists(SATELLITE_BUCKET):
         for sid in ids:
@@ -163,8 +169,8 @@ async def main() -> int:
         if "predictions" in only:
             await db.execute(text("delete from predictions where source is null or source = 'legacy'"))
         if station_ids:
-            for table in STATION_TABLES:
-                await db.execute(text(f"delete from {table} where station_id like :p"), {"p": TEST_STATION_LIKE})
+            for table, column in station_counts:
+                await db.execute(text(f"delete from {table} where {column} like :p"), {"p": TEST_STATION_LIKE})
             await db.execute(text("delete from stations where id like :p"), {"p": TEST_STATION_LIKE})
         await db.commit()
         _say(f"ฐานข้อมูล: ลบบัญชี {len(users)} พยากรณ์เก่า {n_pred} แถว สถานีทดสอบ {len(station_ids)} สถานี "
