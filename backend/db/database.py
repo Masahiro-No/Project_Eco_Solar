@@ -170,7 +170,10 @@ async def seed_default_stations() -> None:
                     password_hash=pwd_context.hash(settings.admin_password),
                     role="admin",
                 ))
-            elif admin.role != "admin":
+            else:
                 admin.role = "admin"
+                # ADMIN_PASSWORD in .env is the admin's password: changing it there and restarting the API changes it
+                if not pwd_context.verify(settings.admin_password, admin.password_hash):
+                    admin.password_hash = pwd_context.hash(settings.admin_password)
 
         await session.commit()

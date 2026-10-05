@@ -168,7 +168,13 @@ cp .env.example .env
 docker compose up -d
 ```
 
-เปิด http://localhost:3000 แล้วล็อกอินด้วยบัญชีผู้ดูแล (`ADMIN_EMAIL` ใน `.env`) หรือบัญชี operator ที่ระบบสร้างไว้ให้ (ค่าเริ่มต้นอยู่ใน `backend/db/database.py`) รอบพยากรณ์แรกจะมาภายใน 10 นาที
+เปิด http://localhost:3000 รอบพยากรณ์แรกจะมาภายใน 10 นาที
+
+บัญชีผู้ใช้
+
+- ผู้ดูแล (admin): อีเมลและรหัสผ่านคือ `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` ถ้าจะเปลี่ยนรหัสผ่าน ให้แก้ใน `.env` แล้วสั่ง `docker compose up -d api`
+- ผู้ควบคุมระบบ (operator): สมัครเองได้ที่แท็บ Sign Up ของหน้า login บัญชีที่สมัครได้สิทธิ์ operator เสมอ สิทธิ์ admin ให้ได้โดย admin เท่านั้น
+- บัญชี operator ตั้งต้นสำหรับทดลอง อยู่ในโค้ด seed ที่ `backend/db/database.py`
 
 ### เมื่อแก้โค้ด
 

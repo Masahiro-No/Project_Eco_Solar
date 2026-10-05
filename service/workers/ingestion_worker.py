@@ -250,7 +250,8 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
             await db.commit()
 
             # D. Chain: run the real forecast model on the data that was just ingested
-            results["inference"] = await _trigger_inference(ctx, db, active_stations, dt_frame)
+            round_started = datetime.fromtimestamp(start_time, tz=timezone.utc)
+            results["inference"] = await _trigger_inference(ctx, db, active_stations, round_started)
 
             # E. ConvLSTM retrain: start one when a batch of new real daytime scans is complete
             results["convlstm_retrain"] = await _trigger_convlstm_retrain(ctx, active_stations)
@@ -268,7 +269,7 @@ async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
         return results
 
 
-async def _trigger_inference(ctx: dict, db, stations, dt_frame: Optional[datetime]) -> dict[str, Any]:
+async def _trigger_inference(ctx: dict, db, stations, round_started: datetime) -> dict[str, Any]:
     """Enqueue `run_inference` for each station. Stations with stale/insufficient data are skipped."""
     summary: dict[str, Any] = {"queued": [], "skipped": {}}
     pool = ctx.get("redis")
@@ -276,9 +277,13 @@ async def _trigger_inference(ctx: dict, db, stations, dt_frame: Optional[datetim
         logger.warning("No Redis connection in ARQ context; inference not triggered.")
         return summary
 
-    slot = (dt_frame or datetime.now(timezone.utc)).strftime("%Y%m%d%H%M")
+    # One forecast per station per 10-minute round, keyed by the time the round started (rounds take
+    # 2-4 minutes, so the time of this call can already be in the next 10-minute slot). The satellite scan
+    # time is not used: NICT's newest scan can stay the same for two rounds (it does every day around the
+    # 02:40 UTC gap), and the weather input is newer by then.
+    slot = round_started.replace(minute=(round_started.minute // 10) * 10, second=0, microsecond=0).strftime("%Y%m%d%H%M")
     for st in stations:
-        job_id = f"infer-{st.id}-{slot}"  # deterministic: one run per station per satellite scan
+        job_id = f"infer-{st.id}-{slot}"  # deterministic: a round that is triggered twice runs once
         try:
             queued_id, reason = await InferenceService.enqueue_for_station(st, db, pool, job_id)
         except Exception as exc:

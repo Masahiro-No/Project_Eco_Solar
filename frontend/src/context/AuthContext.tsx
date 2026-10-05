@@ -15,6 +15,8 @@ export type User = {
   avatar?: string;
 };
 
+export type RegisterResult = { success: boolean; error?: string; code?: 'exists' | 'invalid' | 'network' };
+
 type AuthContextType = {
   user: User | null;
   token: string | null;
@@ -22,6 +24,8 @@ type AuthContextType = {
   isAdmin: boolean;
   isLoading: boolean;
   login: (email?: string, password?: string, name?: string) => Promise<{ success: boolean; error?: string }>;
+  /** Creates an operator account and signs in. Admin rights are given by an admin, never by sign-up. */
+  register: (email: string, password: string) => Promise<RegisterResult>;
   logout: () => void;
 };
 
@@ -32,6 +36,7 @@ const AuthContext = createContext<AuthContextType>({
   isAdmin: false,
   isLoading: false,
   login: async () => ({ success: false }),
+  register: async () => ({ success: false }),
   logout: () => {},
 });
 
@@ -147,6 +152,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const register = useCallback(
+    async (email: string, password: string): Promise<RegisterResult> => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), password }),
+        });
+        if (res.status === 409) return { success: false, code: 'exists' };
+        if (!res.ok) return { success: false, code: 'invalid' };
+      } catch {
+        return { success: false, code: 'network' };
+      }
+      return login(email, password);
+    },
+    [login]
+  );
+
   const value = useMemo(
     () => ({
       user,
@@ -155,9 +178,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isAdmin: user?.role === 'admin',
       isLoading,
       login,
+      register,
       logout,
     }),
-    [user, token, isLoading, login, logout]
+    [user, token, isLoading, login, register, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

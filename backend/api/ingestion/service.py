@@ -25,6 +25,7 @@ SATELLITE_BUCKET = "satellite-cache"
 
 
 NICT_B03_BASE_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03"
+BLANK_TILE_MIN_SUN_ELEVATION_DEG = 6.0  # same daylight limit as service/workers/satellite_preprocessor.py (cos zenith 0.10)
 
 
 def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = 1100) -> tuple[int, int]:
@@ -152,6 +153,12 @@ class IngestionService:
             crop_arr = band_data[row - half : row + half, col - half : col + half]
             if crop_arr.shape != (crop_size, crop_size):
                 crop_arr = np.array(Image.fromarray(crop_arr).resize((crop_size, crop_size), Image.Resampling.BILINEAR))
+
+            # NICT answers a scan it has no image for (not processed yet, or the daily 02:40 / 14:40 UTC gap)
+            # with an all-black tile. With the sun up that is not an observation: nothing is stored for it.
+            _, elevation_deg = SolarCalculator.calculate_solar_position(lat, lon, dt_utc)
+            if int(crop_arr.max()) == 0 and elevation_deg >= BLANK_TILE_MIN_SUN_ELEVATION_DEG:
+                return None, dt_utc, ""
 
             buf = io.BytesIO()
             Image.fromarray(crop_arr).save(buf, format="PNG")
@@ -537,11 +544,10 @@ class IngestionService:
 
         backfilled_count = 0
         for ts in missing_ts:
+            # only the station's own crop counts: a scan NICT has no image for stays missing
             img_bytes, dt_frame, filename = IngestionService.fetch_station_b03_crop(
                 ts, station.latitude, station.longitude
             )
-            if not img_bytes:
-                img_bytes, dt_frame, filename = IngestionService.fetch_nict_historical_image(ts)
             if img_bytes and filename:
                 object_name = f"{station_id}/{filename}"
                 storage.upload_file(
@@ -559,17 +565,7 @@ class IngestionService:
                 db.add(frame_meta)
                 backfilled_count += 1
 
-        if backfilled_count > 0 and img_bytes:
-            try:
-                storage.upload_file(
-                    bucket_name=SATELLITE_BUCKET,
-                    object_name=f"{station_id}_latest.png",
-                    data=io.BytesIO(img_bytes),
-                    length=len(img_bytes),
-                    content_type="image/png",
-                )
-            except Exception:
-                pass
+        # the dashboard preview ('<station>_latest.png') is written with the newest scan only, never with a backfilled one
 
         await db.commit()
         return {

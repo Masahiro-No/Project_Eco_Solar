@@ -384,6 +384,19 @@
     "login_feat_dss_title": "Decision support",
     "login_feat_dss_desc": "Compares generation with the target (ΔP) and recommends a reserve",
     "lb_col_lstm": "LSTM only",
-    "lb_mae_lstm": "MAE of LSTM only"
+    "lb_mae_lstm": "MAE of LSTM only",
+    "signup_tab": "Sign Up",
+    "signup_title": "Create an account",
+    "signup_desc": "A new account is an operator: forecasts, recommendations and alerts. Admin rights are given by an administrator.",
+    "signup_confirm_label": "Confirm password",
+    "signup_password_hint": "At least 8 characters",
+    "signup_btn_submit": "Create account and sign in",
+    "signup_btn_loading": "Creating the account...",
+    "signup_success": "Account created. Opening the dashboard...",
+    "signup_error_exists": "This email already has an account. Use the Sign In tab.",
+    "signup_error_short": "The password needs at least 8 characters",
+    "signup_error_mismatch": "The two passwords do not match",
+    "signup_error_invalid": "The email or password is not in a valid form",
+    "signup_error_network": "Cannot reach the server. Please try again."
   }
 }

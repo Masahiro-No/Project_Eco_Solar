@@ -384,6 +384,19 @@
     "login_feat_dss_title": "ระบบสนับสนุนการตัดสินใจ",
     "login_feat_dss_desc": "เทียบกำลังผลิตกับเป้า (ΔP) และแนะนำกำลังสำรอง",
     "lb_col_lstm": "LSTM อย่างเดียว",
-    "lb_mae_lstm": "MAE ของ LSTM อย่างเดียว"
+    "lb_mae_lstm": "MAE ของ LSTM อย่างเดียว",
+    "signup_tab": "Sign Up",
+    "signup_title": "สร้างบัญชีผู้ใช้",
+    "signup_desc": "บัญชีใหม่ได้สิทธิ์ผู้ควบคุมระบบ (operator): ดูพยากรณ์ คำแนะนำ และการแจ้งเตือน สิทธิ์ผู้ดูแล (admin) กำหนดโดยผู้ดูแลระบบ",
+    "signup_confirm_label": "ยืนยันรหัสผ่าน",
+    "signup_password_hint": "รหัสผ่านอย่างน้อย 8 ตัวอักษร",
+    "signup_btn_submit": "สร้างบัญชีและเข้าสู่ระบบ",
+    "signup_btn_loading": "กำลังสร้างบัญชี...",
+    "signup_success": "สร้างบัญชีสำเร็จ กำลังพาไปยังแดชบอร์ด...",
+    "signup_error_exists": "อีเมลนี้มีบัญชีอยู่แล้ว ให้เข้าสู่ระบบที่แท็บ Sign In",
+    "signup_error_short": "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร",
+    "signup_error_mismatch": "รหัสผ่านสองช่องไม่ตรงกัน",
+    "signup_error_invalid": "อีเมลหรือรหัสผ่านไม่ตรงตามรูปแบบ",
+    "signup_error_network": "ติดต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง"
   }
 }

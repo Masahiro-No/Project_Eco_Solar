@@ -11,6 +11,7 @@ import {
   EyeOffIcon,
   ArrowLeftIcon,
   LogInIcon,
+  UserPlusIcon,
   CheckCircle2Icon,
   AlertCircleIcon,
   CpuIcon,
@@ -28,11 +29,12 @@ export default function LoginPage() {
   const t = useTranslations('common');
   const router = useRouter();
   const { locale, setLocale } = useLanguage();
-  const { isLoggedIn, login } = useAuth();
+  const { isLoggedIn, login, register } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState(DEMO_MODE ? 'operator@solardss.io' : '');
   const [password, setPassword] = useState(DEMO_MODE ? 'operator1234' : '');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -59,6 +61,37 @@ export default function LoginPage() {
       return;
     }
 
+    if (activeTab === 'signup') {
+      if (password.length < 8) {
+        setErrorMsg(t('signup_error_short'));
+        return;
+      }
+      if (password !== confirmPassword) {
+        setErrorMsg(t('signup_error_mismatch'));
+        return;
+      }
+      setLoading(true);
+      const created = await register(email, password);
+      setLoading(false);
+      if (created.success) {
+        setSuccessMsg(t('signup_success'));
+        setTimeout(() => {
+          router.push('/');
+        }, 800);
+      } else {
+        setErrorMsg(
+          created.code === 'exists'
+            ? t('signup_error_exists')
+            : created.code === 'network'
+            ? t('signup_error_network')
+            : created.code === 'invalid'
+            ? t('signup_error_invalid')
+            : created.error || t('login_error_invalid')
+        );
+      }
+      return;
+    }
+
     setLoading(true);
     const result = await login(email, password);
     setLoading(false);
@@ -71,6 +104,13 @@ export default function LoginPage() {
     } else {
       setErrorMsg(result.error || t('login_error_invalid'));
     }
+  };
+
+  const switchTab = (tab: 'signin' | 'signup') => {
+    setActiveTab(tab);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setConfirmPassword('');
   };
 
   const handleQuickDemo = async () => {
@@ -103,7 +143,7 @@ export default function LoginPage() {
           {/* Sign In button in header */}
           <button
             type="button"
-            onClick={() => setActiveTab('signin')}
+            onClick={() => switchTab('signin')}
             className="flex items-center gap-1.5 rounded-lg bg-brand-soft px-3 py-1.5 text-xs font-bold text-brand transition-colors hover:bg-brand-soft/80"
           >
             <LogInIcon className="h-3.5 w-3.5" />
@@ -214,7 +254,8 @@ export default function LoginPage() {
             <div className="mb-6 flex items-center gap-4 border-b border-line pb-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('signin')}
+                onClick={() => switchTab('signin')}
+                aria-pressed={activeTab === 'signin'}
                 className={`flex items-center gap-2 pb-1 text-sm font-bold transition-colors ${
                   activeTab === 'signin'
                     ? 'border-b-2 border-brand text-brand'
@@ -224,6 +265,19 @@ export default function LoginPage() {
                 <LogInIcon className="h-4 w-4" />
                 <span>Sign In</span>
               </button>
+              <button
+                type="button"
+                onClick={() => switchTab('signup')}
+                aria-pressed={activeTab === 'signup'}
+                className={`flex items-center gap-2 pb-1 text-sm font-bold transition-colors ${
+                  activeTab === 'signup'
+                    ? 'border-b-2 border-brand text-brand'
+                    : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <UserPlusIcon className="h-4 w-4" />
+                <span>{t('signup_tab')}</span>
+              </button>
             </div>
 
             <div className="mb-5">
@@ -232,9 +286,9 @@ export default function LoginPage() {
                 <span className="text-xl font-bold tracking-tight text-[#1e3a8a]">SolarDSS</span>
               </div>
               <h1 className="text-2xl font-bold tracking-tight text-[#0f1f4d]">
-                {t('login_welcome_back')}
+                {activeTab === 'signup' ? t('signup_title') : t('login_welcome_back')}
               </h1>
-              <p className="mt-1 text-xs text-slate-500">{t('sign_in_desc')}</p>
+              <p className="mt-1 text-xs text-slate-500">{activeTab === 'signup' ? t('signup_desc') : t('sign_in_desc')}</p>
             </div>
 
             {/* Notifications */}
@@ -282,6 +336,7 @@ export default function LoginPage() {
                   <label className="block text-xs font-semibold text-slate-700">
                     {t('login_password_label')}
                   </label>
+                  {activeTab === 'signin' && (
                   <a
                     href="#"
                     onClick={(e) => {
@@ -292,6 +347,7 @@ export default function LoginPage() {
                   >
                     {t('login_forgot_password')}
                   </a>
+                  )}
                 </div>
                 <div className="relative">
                   <LockIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -301,6 +357,8 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={t('login_password_placeholder')}
                     required
+                    minLength={8}
+                    autoComplete={activeTab === 'signup' ? 'new-password' : 'current-password'}
                     className="h-10 w-full rounded-lg border border-line bg-white pl-9 pr-10 text-sm text-ink placeholder:text-slate-400 focus:border-brand-mid focus:outline-none focus:ring-2 focus:ring-brand-soft"
                   />
                   <button
@@ -313,6 +371,30 @@ export default function LoginPage() {
                 </div>
               </div>
 
+              {activeTab === 'signup' && (
+                <div>
+                  <label htmlFor="signup-confirm" className="mb-1.5 block text-xs font-semibold text-slate-700">
+                    {t('signup_confirm_label')}
+                  </label>
+                  <div className="relative">
+                    <LockIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      id="signup-confirm"
+                      type={showPassword ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder={t('login_password_placeholder')}
+                      required
+                      minLength={8}
+                      autoComplete="new-password"
+                      className="h-10 w-full rounded-lg border border-line bg-white pl-9 pr-3 text-sm text-ink placeholder:text-slate-400 focus:border-brand-mid focus:outline-none focus:ring-2 focus:ring-brand-soft"
+                    />
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">{t('signup_password_hint')}</p>
+                </div>
+              )}
+
+              {activeTab === 'signin' && (
               <div className="flex items-center">
                 <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
                   <input
@@ -324,6 +406,7 @@ export default function LoginPage() {
                   <span>{t('login_remember_me')}</span>
                 </label>
               </div>
+              )}
 
               {/* Main Sign In Submit Button */}
               <button
@@ -334,8 +417,13 @@ export default function LoginPage() {
                 {loading ? (
                   <span className="flex items-center gap-2 text-sm">
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                    {t('login_btn_loading')}
+                    {activeTab === 'signup' ? t('signup_btn_loading') : t('login_btn_loading')}
                   </span>
+                ) : activeTab === 'signup' ? (
+                  <>
+                    <UserPlusIcon className="h-4 w-4" />
+                    <span>{t('signup_btn_submit')}</span>
+                  </>
                 ) : (
                   <>
                     <LogInIcon className="h-4 w-4" />
