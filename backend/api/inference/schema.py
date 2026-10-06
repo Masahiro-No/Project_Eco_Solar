@@ -34,7 +34,7 @@ class PredictionResultData(BaseModel):
     ghi_forecast_lower: Optional[list[float]] = Field(None, description="Lower edge of the typical error range: forecast - RMSE of the model at that lead time")
     ghi_forecast_upper: Optional[list[float]] = Field(None, description="Upper edge of the typical error range, at most 1.2 x clear-sky GHI")
     cloud_impact_level: Optional[str] = Field(None, description="low | medium | high from the expected loss of GHI (10% / 30%); null when there is no satellite information")
-    satellite_status: Optional[str] = Field(None, description="ok | shifted | observed_only | missing | low_sun | night | model_unavailable")
+    satellite_status: Optional[str] = Field(None, description="ok | shifted | gap_skipped | observed_only | missing | low_sun | night | model_unavailable")
     satellite_lag_minutes: Optional[int] = Field(None, description="Age of the newest satellite frame relative to the forecast origin")
     is_night: Optional[bool] = None
     estimated_power_kw: float = Field(..., description="P_gen at the first forecast step, from the blended GHI")

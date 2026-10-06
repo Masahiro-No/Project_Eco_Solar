@@ -19,10 +19,11 @@ const AOI_OFFSET_PCT = ((CROP_PX - AOI_PX) / 2 / CROP_PX) * 100;
 
 const CLOCK = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' });
 
-type StatusKey = 'sat_ok' | 'sat_shifted' | 'sat_observed_only' | 'sat_missing' | 'sat_night' | 'sat_low_sun' | 'sat_model_unavailable';
+type StatusKey = 'sat_ok' | 'sat_shifted' | 'sat_gap_skipped' | 'sat_observed_only' | 'sat_missing' | 'sat_night' | 'sat_low_sun' | 'sat_model_unavailable';
 const STATUS_KEY: Record<string, StatusKey> = {
   ok: 'sat_ok',
   shifted: 'sat_shifted',
+  gap_skipped: 'sat_gap_skipped',
   observed_only: 'sat_observed_only',
   missing: 'sat_missing',
   night: 'sat_night',
@@ -61,7 +62,7 @@ export function CloudPanel() {
   const nowPct = prediction?.cloud_coverage_now_pct ?? null;
   const level = prediction?.cloud_impact_level ?? null;
   const ui = level ? CLOUD_UI[level] : null;
-  const usable = ['ok', 'shifted', 'observed_only'].includes(prediction?.satellite_status ?? '');
+  const usable = ['ok', 'shifted', 'gap_skipped', 'observed_only'].includes(prediction?.satellite_status ?? '');
   const lossNow = prediction?.sat_ghi_loss_now_pct ?? null;
   const statusKey = prediction?.satellite_status ? STATUS_KEY[prediction.satellite_status] : undefined;
   const imageTime = image?.lastModified ? parseBackendDate(new Date(image.lastModified).toISOString()) : null;

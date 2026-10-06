@@ -34,14 +34,14 @@ service/
 │   ├── calibrate_satellite_ghi.py  fit ค่า a, b ของดัชนีฟ้าใสจากภาพกับ GHI ที่วัดจริง (--write) หรือวัดความคลาดของสูตรเดิมรายสถานี (--check)
 │   └── backtest_cloud.py         ทดสอบย้อนหลังความแม่นของ % เมฆ
 ├── models/solar_lstm.py          โครงสร้าง LSTM (PyTorch) ที่ใช้ตอนเทรน; โครงสร้าง ConvLSTM อยู่ใน retrain_convlstm.py
-└── tests/                        ชุดทดสอบ 46 รายการ
+└── tests/                        ชุดทดสอบ 47 รายการ
 ```
 
 ## งานพยากรณ์หนึ่งรอบ (`run_inference`)
 
 1. รับฟีเจอร์ 36 ช่อง × 16 ค่าที่ ingestion-worker เตรียมไว้ (สร้างด้วย `backend/api/inference/weather_grid.py`)
 2. LSTM (ONNX) ให้ GHI 18 ก้าว
-3. ฝั่งดาวเทียม: ใช้เฟรมจริงล่าสุดและผลของ ConvLSTM (ONNX) คิดความสว่างใน AOI แล้วแปลงเป็นดัชนีฟ้าใสด้วยค่า calibration สถานะที่เป็นไปได้คือ `ok`, `shifted`, `observed_only`, `missing`, `low_sun`, `night`
+3. ฝั่งดาวเทียม: ใช้เฟรมจริงล่าสุดและผลของ ConvLSTM (ONNX) คิดความสว่างใน AOI แล้วแปลงเป็นดัชนีฟ้าใสด้วยค่า calibration สถานะที่เป็นไปได้คือ `ok`, `shifted`, `gap_skipped` (เว้นรอบสแกนที่ขาดหนึ่งรอบ ใช้ภาพจริง 12 เฟรม), `observed_only`, `missing`, `low_sun`, `night`
 4. รวมผลด้วย `w(t) = 0.9·exp(−t/102)` แล้วคำนวณ P_gen, เป้า, ΔP และระดับการเตือน
 5. เก็บ 18 ภาพที่ ConvLSTM ทำนายในรอบนั้นลง bucket `satellite-forecast` (เขียนทับของเดิม รอบที่ไม่มีภาพบันทึกว่า 0 ภาพ) ให้ตัวเล่นภาพเมฆบนหน้าเว็บ
 6. คืนผลให้ ingestion-worker บันทึกลงตาราง `predictions`

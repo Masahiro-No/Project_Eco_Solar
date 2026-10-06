@@ -362,3 +362,17 @@ def test_only_one_ingestion_round_runs_at_a_time():
         return "done"
 
     assert asyncio.run(run_one_at_a_time(None, plain)) == (True, "done")
+
+
+def test_one_missing_older_scan_is_left_out_and_nothing_is_made_up():
+    from service.workers.satellite_preprocessor import skip_one_gap
+
+    def slots(missing=()):
+        return [None if i in missing else np.full((2, 2), float(i), dtype=np.float32) for i in range(13)]
+
+    frames, gap = skip_one_gap(slots(missing=(4,)))
+    assert gap == 4 and [float(f[0, 0]) for f in frames] == [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12]   # 12 real frames, in order
+    assert skip_one_gap(slots(missing=(1,))) is not None and skip_one_gap(slots(missing=(9,))) is not None
+    for not_allowed in ((), (0,), (10,), (11,), (12,), (3, 7)):       # complete, oldest slot, one of the newest three, two gaps
+        assert skip_one_gap(slots(missing=not_allowed)) is None
+    assert skip_one_gap(slots()[:12]) is None                         # needs the 13 slots

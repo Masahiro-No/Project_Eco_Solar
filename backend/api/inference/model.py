@@ -38,7 +38,7 @@ class Prediction(Base):
     target_profile_kw: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)         # target that follows the sun, per step
     ghi_forecast_lower: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)        # forecast - RMSE(lead time)
     ghi_forecast_upper: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)        # forecast + RMSE(lead time)
-    satellite_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ok, shifted, observed_only, missing, low_sun, night
+    satellite_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # ok, shifted, gap_skipped, observed_only, missing, low_sun, night
     satellite_lag_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # legacy column, no longer written
 

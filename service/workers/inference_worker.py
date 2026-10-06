@@ -352,8 +352,9 @@ def _satellite_branch(
     Per step: the cloud fraction in the AOI (for display) and the clear-sky index k from the AOI brightness
     (for the blend). The newest satellite frame is usually 20-30 minutes older than the weather data, so
     ConvLSTM frame j (sat_end + (j + 1) * 10 min) maps to forecast step i = j - lag_steps. Near lead times
-    use what the newest real frame shows, later ones the ConvLSTM forecast. Without a complete 12-frame
-    window the value of the newest real frame is held for at most OBSERVED_HOLD_MAX_MIN. Steps without a
+    use what the newest real frame shows, later ones the ConvLSTM forecast. One missing older scan is left
+    out of the window (status gap_skipped). Without 12 usable real frames the value of the newest real frame
+    is held for at most OBSERVED_HOLD_MAX_MIN. Steps without a
     value keep None and get a satellite weight of 0.
     """
     window = load_satellite_window(station_id, lat, lon, origin)
@@ -499,7 +500,7 @@ async def run_inference(
             sat_loss=sat_loss, sat_loss_now=sat_loss_now,
             step_metrics=meta.get("step_metrics"), step_minutes=STEP_MINUTES,
         )
-        if d.is_night and sat["status"] in ("ok", "shifted", "observed_only"):
+        if d.is_night and sat["status"] in ("ok", "shifted", "gap_skipped", "observed_only"):
             sat["status"] = "night"
         band = decision.uncertainty_band(ghi_blend, clearsky, decision.daylight_rmse_metrics(meta), STEP_MINUTES)
         logger.info(
@@ -542,7 +543,7 @@ async def run_inference(
             # provenance: every value above comes from the deployed models and real inputs
             "lstm_source": "onnx",
             "input_source": "weather_features",
-            "cloud_source": {"ok": "convlstm", "shifted": "convlstm", "observed_only": "observed"}.get(sat["status"], "none"),
+            "cloud_source": {"ok": "convlstm", "shifted": "convlstm", "gap_skipped": "convlstm", "observed_only": "observed"}.get(sat["status"], "none"),
         }
 
         try:
