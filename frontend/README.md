@@ -42,6 +42,10 @@ frontend/src/
 └── messages/           th.json และ en.json ต้องมี key ครบเท่ากันทั้งสองไฟล์
 ```
 
+README ของโฟลเดอร์ย่อย: [src](src/README.md) · [app](src/app/README.md) (และของแต่ละหน้า) · [components/UI](src/components/UI/README.md) · [context](src/context/README.md) · [services](src/services/README.md) · [lib](src/lib/README.md) · [messages](src/messages/README.md)
+
+`public/` ไม่มี README ในตัว เพราะทุกไฟล์ในโฟลเดอร์นั้นถูกเปิดให้ดาวน์โหลดผ่านเว็บ ในนั้นมีภาพประกอบของเมนูด้านซ้าย 1 ภาพที่ใช้อยู่ และไฟล์จาก template ที่ไม่มีโค้ดใช้ 6 ไฟล์ (ภาพ jpg 1 ไฟล์ และ svg 5 ไฟล์)
+
 ## ธีมสว่างและธีมมืด
 
 ปุ่มที่แถบบนสลับธีม ค่าเริ่มต้นคือสว่าง ธีมมืดคือ `data-theme="dark"` บน `<html>` และสีทั้งหมดอยู่ใน `src/app/globals.css` สามส่วน:

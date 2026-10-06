@@ -96,6 +96,7 @@ uv run uvicorn main:app --reload
 docker exec fastapi sh -c 'cd /app && uv run --with aiosqlite --with httpx python scripts/check_ground_truth_flow.py'
 ```
 
-## README ของโมดูล
+## README ของโฟลเดอร์ย่อย
 
-[auth](api/auth/README.md) · [users](api/users/README.md) · [label_studio](api/label_studio/README.md) · [jobs](api/jobs/README.md) · [storage](api/storage/README.md) · [core](core/README.md) · [db](db/README.md)
+- [api](api/README.md) รายการมอดูลทั้งหมด และ README ของแต่ละมอดูล: [auth](api/auth/README.md) · [users](api/users/README.md) · [stations](api/stations/README.md) · [ingestion](api/ingestion/README.md) · [inference](api/inference/README.md) · [dashboard](api/dashboard/README.md) · [label_studio](api/label_studio/README.md) · [frame_review](api/frame_review/README.md) · [retrain](api/retrain/README.md) · [jobs](api/jobs/README.md) · [storage](api/storage/README.md)
+- [core](core/README.md) ค่าตั้งของ API · [db](db/README.md) ฐานข้อมูล · [scripts](scripts/README.md) สคริปต์ที่รันด้วยมือ · [utils](utils/README.md)

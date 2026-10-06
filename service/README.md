@@ -32,10 +32,14 @@ service/
 │   ├── retrain_timeseries.py     fine-tune LSTM จาก label
 │   ├── retrain_convlstm.py       retrain ConvLSTM จากภาพจริง (--status, --backfill-days N, --run)
 │   ├── calibrate_satellite_ghi.py  fit ค่า a, b ของดัชนีฟ้าใสจากภาพกับ GHI ที่วัดจริง (--write) หรือวัดความคลาดของสูตรเดิมรายสถานี (--check)
+│   ├── dataset.py                รายชื่อฟีเจอร์ 16 ตัว หน้าต่างข้อมูล และตัวอ่านชุดข้อมูลจาก MinIO
+│   ├── onnx_weights.py           โหลดน้ำหนักจาก ONNX กลับเข้าโมเดล PyTorch เพื่อเทรนต่อ
 │   └── backtest_cloud.py         ทดสอบย้อนหลังความแม่นของ % เมฆ
 ├── models/solar_lstm.py          โครงสร้าง LSTM (PyTorch) ที่ใช้ตอนเทรน; โครงสร้าง ConvLSTM อยู่ใน retrain_convlstm.py
-└── tests/                        ชุดทดสอบ 47 รายการ
+└── tests/                        ชุดทดสอบ 47 รายการ และการเทียบสูตรสองฝั่ง 3 รายการ
 ```
+
+README ของโฟลเดอร์ย่อย: [workers](workers/README.md) · [training](training/README.md) · [models](models/README.md) · [tests](tests/README.md)
 
 ## งานพยากรณ์หนึ่งรอบ (`run_inference`)
 

@@ -20,8 +20,16 @@
 | **Label Studio**   | `LABEL_STUDIO_URL`, `LABEL_STUDIO_API_KEY`                               | URL และ API Key สำหรับสิทธิ์เชื่อมต่อ Label Studio              |
 | **Redis / Worker** | `REDIS_HOST`, `REDIS_PORT`                                               | การเชื่อมต่อ Redis Server สำหรับ Job Queue                      |
 | **Retrain**        | `ENABLE_RETRAIN`, `RETRAIN_DEBOUNCE_SECONDS`, `CONVLSTM_RETRAIN_THRESHOLD` | เปิดปิด retrain (ค่าเริ่มต้นปิด), เวลารอรวม label ก่อนนัด retrain LSTM (300 วินาที), จำนวนเวลาสแกนใหม่ต่อรอบ retrain ConvLSTM (50) |
-| **Admin account**  | `ADMIN_EMAIL`, `ADMIN_PASSWORD`                                          | บัญชีผู้ดูแลที่สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน ถ้าไม่ตั้ง `ADMIN_PASSWORD` จะไม่สร้าง |
+| **Admin account**  | `ADMIN_EMAIL`, `ADMIN_PASSWORD`                                          | บัญชีผู้ดูแลที่สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน |
+| **Operator account** | `OPERATOR_PASSWORD`                                                    | บัญชี `operator@solardss.io` สร้างเมื่อตั้งค่านี้เท่านั้น |
+| **อื่น ๆ**         | `MLFLOW_TRACKING_URI`, `GRAFANA_URL`, `DEBUG_MODE`                       | ที่อยู่ของ MLflow และ Grafana; โหมด debug ปิดเป็นค่าเริ่มต้น |
 
 ## File Structure
 
 - `config.py`: นิยามคลาส `Settings` (สืบทอดจาก `BaseSettings`) พร้อมโหลดตัวแปรจากไฟล์ `.env` และสร้าง Singleton instance `settings` ให้มอดูลอื่นเรียกใช้ได้ทันที
+
+## ที่มาของค่า
+
+- API ได้ค่าจาก `environment` ใน `compose.yml` และจากไฟล์ `backend/.env` (ไม่อยู่ใน git สร้างจาก `backend/.env.example`) `ingestion-worker` อ่าน `backend/.env` ไฟล์เดียวกัน
+- `jwt_secret_key` ต้องยาวอย่างน้อย 16 ตัวอักษร ถ้าว่างหรือสั้นกว่านั้น API จะไม่เริ่มทำงานและบอกชื่อค่านี้
+- ค่าที่เป็นความลับของแต่ละเครื่อง (รหัสผ่าน token) อยู่ใน `.env` ที่โฟลเดอร์หลักและ `backend/.env` ทั้งสองไฟล์ไม่อยู่ใน git

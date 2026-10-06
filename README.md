@@ -352,7 +352,7 @@ compose.yml         ทุก service
 PLAN.md             แผนงาน ข้อกำหนด และสถานะ
 ```
 
-แต่ละส่วนมี README ของตัวเอง: [backend](backend/README.md), [service](service/README.md), [frontend](frontend/README.md)
+ทุกโฟลเดอร์ที่อยู่ใน git มี README ของตัวเอง เริ่มได้จาก [backend](backend/README.md), [service](service/README.md), [frontend](frontend/README.md), [model](model/README.md), [observability](observability/README.md) และ [diagrams](diagrams/README.md) แล้วตามลิงก์ลงไปยังโฟลเดอร์ย่อย
 
 ## 7. เนื้อหารายวิชาที่ใช้ในระบบ
 
