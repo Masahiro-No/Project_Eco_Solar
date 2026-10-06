@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import urllib.request
@@ -57,6 +58,13 @@ def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = 1100) 
     col = coff + x * (2**-16) * cfac * (180.0 / math.pi) * scale
     row = loff - y * (2**-16) * lfac * (180.0 / math.pi) * scale
     return int(round(col)), int(round(row))
+
+
+def fetch_json(url: str, timeout: float) -> dict:
+    """GET a JSON document. Blocking: async code calls it through asyncio.to_thread."""
+    req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
 
 
 class IngestionService:
@@ -249,10 +257,9 @@ class IngestionService:
             f"&timezone=UTC&{OPEN_METEO_WIND_UNIT}"
         )
 
-        req = urllib.request.Request(url, headers={"User-Agent": "SolarForecastDSS/1.0"})
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode())
+            # in a thread: the event loop (other requests, the worker's other jobs) is not held while waiting
+            data = await asyncio.to_thread(fetch_json, url, 20)
         except Exception as e:
             return {
                 "status": "failed",
@@ -349,9 +356,7 @@ class IngestionService:
         # 1. Determine latest available satellite frame timestamp
         latest_dt = None
         try:
-            req = urllib.request.Request(NICT_LATEST_JSON, headers={"User-Agent": "SolarForecastDSS/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                latest_info = json.loads(resp.read().decode())
+            latest_info = await asyncio.to_thread(fetch_json, NICT_LATEST_JSON, 10)
             date_str = latest_info.get("date")
             latest_dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         except Exception:
@@ -386,7 +391,7 @@ class IngestionService:
         # 3. Fetch missing frames from NICT Archive
         storage = StorageService()
         try:
-            storage.create_bucket(SATELLITE_BUCKET)
+            await asyncio.to_thread(storage.create_bucket, SATELLITE_BUCKET)
         except Exception:
             pass
 
@@ -396,12 +401,13 @@ class IngestionService:
         backfilled_count = 0
         for ts in missing_ts:
             # only the station's own crop counts: a scan NICT has no image for stays missing
-            img_bytes, dt_frame, filename = IngestionService.fetch_station_b03_crop(
-                ts, station.latitude, station.longitude
+            img_bytes, dt_frame, filename = await asyncio.to_thread(
+                IngestionService.fetch_station_b03_crop, ts, station.latitude, station.longitude
             )
             if img_bytes and filename:
                 object_name = f"{station_id}/{filename}"
-                storage.upload_file(
+                await asyncio.to_thread(
+                    storage.upload_file,
                     bucket_name=SATELLITE_BUCKET,
                     object_name=object_name,
                     data=io.BytesIO(img_bytes),

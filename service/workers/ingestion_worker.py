@@ -45,7 +45,7 @@ from sqlalchemy import select
 from api.inference.service import InferenceService
 from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory, insert_once
 from api.ingestion.normalizer import WeatherDataNormalizer
-from api.ingestion.service import IngestionService, SATELLITE_BUCKET
+from api.ingestion.service import IngestionService, NICT_LATEST_JSON, SATELLITE_BUCKET, fetch_json
 from api.stations.model import Station
 from api.storage.service import StorageService
 from service.workers.round_lock import clear_round_lock, run_one_at_a_time
@@ -120,12 +120,9 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
         # 1. Determine latest Himawari observation timestamp from NICT Japan
         dt_frame = None
         try:
-            import json
-            import urllib.request
-            from api.ingestion.service import NICT_LATEST_JSON
-            req = urllib.request.Request(NICT_LATEST_JSON, headers={"User-Agent": "SolarForecastDSS/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                latest_info = json.loads(resp.read().decode())
+            # downloads and uploads of the round run in threads: the worker's other jobs (collecting finished
+            # forecasts every minute) and its Redis connection are not held while it waits for the network
+            latest_info = await asyncio.to_thread(fetch_json, NICT_LATEST_JSON, 10)
             date_str = latest_info.get("date")
             dt_frame = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             results["satellite_frame"] = {
@@ -141,7 +138,7 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
 
         storage = StorageService()
         try:
-            storage.create_bucket(SATELLITE_BUCKET)
+            await asyncio.to_thread(storage.create_bucket, SATELLITE_BUCKET)
         except Exception:
             pass
 
@@ -162,14 +159,15 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
                 }
 
                 # A. Save localized satellite frame metadata & upload to station folder
-                st_img_bytes, st_dt_frame, st_filename = IngestionService.fetch_station_b03_crop(
-                    dt_frame or datetime.now(timezone.utc), st.latitude, st.longitude
+                st_img_bytes, st_dt_frame, st_filename = await asyncio.to_thread(
+                    IngestionService.fetch_station_b03_crop, dt_frame or datetime.now(timezone.utc), st.latitude, st.longitude
                 )
 
                 if st_img_bytes and st_dt_frame and st_filename:
                     try:
                         object_name = f"{st.id}/{st_filename}"
-                        storage.upload_file(
+                        await asyncio.to_thread(
+                            storage.upload_file,
                             bucket_name=SATELLITE_BUCKET,
                             object_name=object_name,
                             data=io.BytesIO(st_img_bytes),
@@ -177,7 +175,8 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
                             content_type="image/png",
                         )
                         # Also upload latest cropped preview for dashboard
-                        storage.upload_file(
+                        await asyncio.to_thread(
+                            storage.upload_file,
                             bucket_name=SATELLITE_BUCKET,
                             object_name=f"{st.id}_latest.png",
                             data=io.BytesIO(st_img_bytes),
@@ -225,7 +224,7 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
 
                 # C. Live Open-Meteo Ingestion
                 try:
-                    raw_weather = IngestionService.fetch_open_meteo_live(st.latitude, st.longitude)
+                    raw_weather = await asyncio.to_thread(IngestionService.fetch_open_meteo_live, st.latitude, st.longitude)
                     canonical = WeatherDataNormalizer.normalize_open_meteo(
                         raw_weather, st.id, lat=st.latitude, lon=st.longitude
                     )
