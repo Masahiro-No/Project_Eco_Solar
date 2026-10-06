@@ -1,8 +1,15 @@
+from typing import Optional
+
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
-from arq.jobs import Job, JobStatus
+from arq.constants import in_progress_key_prefix, job_key_prefix, result_key_prefix
+from arq.jobs import Job
+from fastapi import HTTPException, status
 
 from core.config import settings
+
+
+KNOWN_QUEUES = ("arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue")
 
 
 class JobService:
@@ -16,17 +23,29 @@ class JobService:
         ))
 
     @staticmethod
+    async def _state(pool: ArqRedis, job_id: str) -> tuple[str, Optional[str]]:
+        """Where a job is: (in_progress | queued | complete | not_found, key of the queue it waits in).
+
+        arq's own Job.status() only looks in the default queue, and every worker here has its own queue.
+        """
+        if await pool.exists(in_progress_key_prefix + job_id):
+            return "in_progress", None
+        for q in KNOWN_QUEUES:
+            if await pool.zscore(q, job_id) is not None:
+                return "queued", q
+        if await pool.exists(result_key_prefix + job_id):
+            return "complete", None
+        return "not_found", None
+
+    @staticmethod
     async def get_status(job_id: str) -> dict:
         pool = await JobService.get_pool()
-        job = Job(job_id, pool)
-        status = await job.status()
-        info = await job.result_info()
-        await pool.close()
-        return {
-            "job_id": job_id,
-            "status": status.value,
-            "result": str(info.result) if info else None,
-        }
+        try:
+            state, _ = await JobService._state(pool, job_id)
+            info = await Job(job_id, pool).result_info()
+        finally:
+            await pool.close()
+        return {"job_id": job_id, "status": state, "result": str(info.result) if info else None}
 
     # ─── Redis Queue Management ──────────────────────────────────────────────
 
@@ -34,10 +53,9 @@ class JobService:
     async def get_all_queues_summary() -> list[dict]:
         """Number of jobs waiting in each queue, counted in Redis."""
         pool = await JobService.get_pool()
-        known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue"]
         summaries = []
 
-        for q in known_queues:
+        for q in KNOWN_QUEUES:
             # Check length of sorted set
             pending = await pool.zcard(q)
             q_name = q.replace("arq:queue:", "").replace("arq:queue", "default")
@@ -68,49 +86,40 @@ class JobService:
 
     @staticmethod
     async def cancel_job(job_id: str) -> dict:
-        """Cancel/delete a pending job from Redis."""
+        """Remove a job that is still waiting from its queue. A running or finished job is not touched."""
         pool = await JobService.get_pool()
-        job = Job(job_id, pool)
-        status = await job.status()
-        
-        # Abort and remove from queues
-        known_queues = ["arq:queue", "arq:queue:train_queue", "arq:queue:inference_queue", "arq:queue:ingest_queue"]
-        for q in known_queues:
-            await pool.zrem(q, job_id)
-        
-        # Delete job metadata key
-        await pool.delete(f"arq:job:{job_id}")
-        await pool.close()
-
-        return {
-            "job_id": job_id,
-            "status": "canceled",
-            "message": f"Job {job_id} (previous status: {status.value}) successfully canceled.",
-        }
+        try:
+            state, queue = await JobService._state(pool, job_id)
+            if state == "not_found":
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
+            if state != "queued":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Job {job_id} is {state}: only a job that is still waiting can be removed from its queue",
+                )
+            await pool.zrem(queue, job_id)
+            await pool.delete(job_key_prefix + job_id)
+        finally:
+            await pool.close()
+        return {"job_id": job_id, "status": "canceled", "message": f"Job {job_id} was waiting and has been removed from its queue."}
 
     @staticmethod
     async def retry_job(job_id: str) -> dict:
-        """Re-enqueue a failed job ID."""
+        """Queue a finished job again, in the queue it ran in. Needs its stored result (kept for a limited time)."""
         pool = await JobService.get_pool()
-        job = Job(job_id, pool)
-        info = await job.result_info()
-
-        # If job info exists, re-enqueue
-        if info:
-            new_job = await pool.enqueue_job(info.function, *info.args, **info.kwargs)
+        try:
+            info = await Job(job_id, pool).result_info()
+            if info is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Job {job_id} has no stored result (it never ran, is still waiting, or the result expired): nothing to retry",
+                )
+            new_job = await pool.enqueue_job(info.function, *info.args, _queue_name=info.queue_name, **info.kwargs)
+            if new_job is None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Job {job_id} could not be queued again")
+        finally:
             await pool.close()
-            return {
-                "job_id": new_job.job_id,
-                "status": "requeued",
-                "message": f"Job re-enqueued as {new_job.job_id}",
-            }
-
-        await pool.close()
-        return {
-            "job_id": job_id,
-            "status": "requeued",
-            "message": "Retry trigger dispatched.",
-        }
+        return {"job_id": new_job.job_id, "status": "requeued", "message": f"Job {job_id} queued again as {new_job.job_id}"}
 
     @staticmethod
     async def clear_queue(queue_name: str) -> dict:

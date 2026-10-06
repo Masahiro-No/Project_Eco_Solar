@@ -1,5 +1,4 @@
-from typing import Optional
-from fastapi import Depends, Query, status
+from fastapi import Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

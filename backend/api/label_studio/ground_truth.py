@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import math
 import threading
@@ -19,6 +20,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from core.config import settings
+
+logger = logging.getLogger("solar.api")
 
 SLOT_SECONDS = 600
 TH_TZ = timezone(timedelta(hours=7))
@@ -182,6 +185,7 @@ class GroundTruthStore:
     def _read_all(self, project_id: int) -> dict[tuple[str, datetime], StoredLabel]:
         """Every label of the project from Label Studio -> {(station, slot): StoredLabel}."""
         out: dict[tuple[str, datetime], StoredLabel] = {}
+        unreadable = 0
         for t in self.svc.list_tasks_with_annotations(project_id):
             data = _get(t, "data", {}) or {}
             if not data.get("station_id") or not data.get("timestamp"):
@@ -189,10 +193,13 @@ class GroundTruthStore:
             try:
                 slot = parse_label_timestamp(data["timestamp"])
             except ValueError:
+                unreadable += 1
                 continue
             ghi, ann_id = task_ghi(t)
             if ghi is not None:
                 out[(data["station_id"], slot)] = StoredLabel(task_id=int(_get(t, "id")), annotation_id=ann_id, ghi=ghi)
+        if unreadable:
+            logger.warning(f"[Labels] {unreadable} Label Studio tasks have a timestamp that cannot be read and were left out")
         return out
 
     def _refresh_in_background(self, project_id: int) -> None:

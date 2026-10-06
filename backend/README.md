@@ -57,7 +57,8 @@ backend/
 - **ไม่มีข้อมูลจำลอง** ถ้าสถานียังไม่มีผลพยากรณ์ API ตอบว่าไม่มี ไม่สร้างค่าแทน
 - **ข้อมูลป้อน LSTM** สร้างที่ `api/inference/weather_grid.py`: จัดแถวสภาพอากาศลงช่อง 10 นาที เติมช่องว่างไม่เกิน 20 นาที ถ้ายังมีช่องว่างจะไม่พยากรณ์และคืนเหตุผล (`gap_in_history`, `insufficient_history`, `stale_data`)
 - **ingestion-worker ใช้โค้ดโฟลเดอร์นี้** (สร้างข้อมูลป้อนโมเดลและบันทึกผลพยากรณ์) แก้ backend แล้วต้อง restart ทั้ง `api` และ `ingestion-worker`
-- **บัญชี admin** สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน จาก `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` ผู้ที่สมัครเองได้ role `operator` เสมอ
+- **ไฟล์ตั้งค่า** API และ ingestion-worker อ่าน `backend/.env` (ไม่อยู่ใน git สร้างจาก `backend/.env.example` แล้วใส่ `jwt_secret_key`)
+- **บัญชี admin** สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน จาก `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` บัญชี `operator@solardss.io` ใช้ `OPERATOR_PASSWORD` แบบเดียวกัน (ไม่ตั้ง = ไม่สร้าง) ผู้ที่สมัครเองได้ role `operator` เสมอ
 - **กราฟทั้งวัน** `GET /inference/predictions-by-date?lead_minutes=N` คืนค่าพยากรณ์ของทั้งวันสำหรับหน้าระบบพยากรณ์: ช่องเวลาที่ผ่านมาแล้วใช้รอบล่าสุดที่ทำนายล่วงหน้าอย่างน้อย N นาที (ต่างได้ไม่เกิน 20 นาที) ช่องเวลาในอนาคตใช้รอบล่าสุด พร้อม MAE เทียบค่าวัดจริงที่ระยะนั้น
 - **ภาพเมฆรายวัน** `GET /ingestion/satellite/{id}/day-frames` คืนภาพจริงของวัน และสำหรับวันนี้ ภาพที่ ConvLSTM ทำนายในรอบล่าสุดจาก bucket `satellite-forecast`
 - **สำเนาค่าวัดจริงในหน่วยความจำ** การอ่าน label ทั้งหมดจาก Label Studio ใช้ 10–30 วินาที `api/label_studio/ground_truth.py` จึงเก็บสำเนาไว้ (ใช้ได้ทันที 2 นาที, ใช้พร้อมอ่านใหม่เบื้องหลังได้ถึง 1 ชั่วโมง) ค่าที่บันทึกผ่าน API เข้าสำเนาทันที การบันทึกยังอ่านจาก Label Studio ใหม่ก่อนเขียนเสมอเพื่อไม่ให้เกิด task ซ้ำ
@@ -84,7 +85,7 @@ uv run uvicorn main:app --reload
 
 | ไฟล์ | ใช้ทำอะไร |
 |---|---|
-| `check_ground_truth_flow.py` | ตรวจ 7 หมวด: ช่องเวลา 10 นาที, การเก็บสภาพอากาศ (ค่าขาด = ไม่มีแถว), ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP ใช้ SQLite ในหน่วยความจำและ Label Studio จำลองเฉพาะในการทดสอบ ไม่แตะข้อมูลจริง |
+| `check_ground_truth_flow.py` | ตรวจ 8 หมวด: ช่องเวลา 10 นาที, กฎกันแถวซ้ำของฐานข้อมูล, การเก็บสภาพอากาศ (ค่าขาด = ไม่มีแถว), ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP ใช้ SQLite ในหน่วยความจำและ Label Studio จำลองเฉพาะในการทดสอบ ไม่แตะข้อมูลจริง |
 | `replay_inference.py` | รันโมเดลจริงกับข้อมูลจริงของสถานีและเวลาที่ระบุ ไม่เขียนฐานข้อมูล |
 | `cleanup_test_data.py` | แสดงรายการข้อมูลทดสอบที่ค้าง (บัญชี, bucket, สถานี `ST-TEST-*`, แถวพยากรณ์เก่า, แถวเฟรมที่ชี้ไปภาพทั้งดวงและแถวสภาพอากาศที่เก็บซ้ำ) และลบเมื่อสั่ง `--apply` แล้วพิมพ์ยืนยันเท่านั้น |
 | `convert_wind_speed_to_ms.py` | แปลงความเร็วลมของแถว Open-Meteo ที่เก็บก่อน 5 ต.ค. 2026 จาก กม./ชม. เป็น ม./วินาที ครั้งเดียว (รันแล้วกับฐานข้อมูลนี้ และไม่ยอมทำซ้ำ) |
@@ -95,6 +96,7 @@ uv run uvicorn main:app --reload
 docker exec fastapi sh -c 'cd /app && uv run --with aiosqlite --with httpx python scripts/check_ground_truth_flow.py'
 ```
 
-## README ของโมดูล
+## README ของโฟลเดอร์ย่อย
 
-[auth](api/auth/README.md) · [users](api/users/README.md) · [label_studio](api/label_studio/README.md) · [jobs](api/jobs/README.md) · [storage](api/storage/README.md) · [core](core/README.md) · [db](db/README.md)
+- [api](api/README.md) รายการมอดูลทั้งหมด และ README ของแต่ละมอดูล: [auth](api/auth/README.md) · [users](api/users/README.md) · [stations](api/stations/README.md) · [ingestion](api/ingestion/README.md) · [inference](api/inference/README.md) · [dashboard](api/dashboard/README.md) · [label_studio](api/label_studio/README.md) · [frame_review](api/frame_review/README.md) · [retrain](api/retrain/README.md) · [jobs](api/jobs/README.md) · [storage](api/storage/README.md)
+- [core](core/README.md) ค่าตั้งของ API · [db](db/README.md) ฐานข้อมูล · [scripts](scripts/README.md) สคริปต์ที่รันด้วยมือ · [utils](utils/README.md)

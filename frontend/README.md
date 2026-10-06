@@ -42,6 +42,10 @@ frontend/src/
 └── messages/           th.json และ en.json ต้องมี key ครบเท่ากันทั้งสองไฟล์
 ```
 
+README ของโฟลเดอร์ย่อย: [src](src/README.md) · [app](src/app/README.md) (และของแต่ละหน้า) · [components/UI](src/components/UI/README.md) · [context](src/context/README.md) · [services](src/services/README.md) · [lib](src/lib/README.md) · [messages](src/messages/README.md)
+
+`public/` ไม่มี README ในตัว เพราะทุกไฟล์ในโฟลเดอร์นั้นถูกเปิดให้ดาวน์โหลดผ่านเว็บ ในนั้นมีภาพประกอบของเมนูด้านซ้าย 1 ภาพที่ใช้อยู่ และไฟล์จาก template ที่ไม่มีโค้ดใช้ 6 ไฟล์ (ภาพ jpg 1 ไฟล์ และ svg 5 ไฟล์)
+
 ## ธีมสว่างและธีมมืด
 
 ปุ่มที่แถบบนสลับธีม ค่าเริ่มต้นคือสว่าง ธีมมืดคือ `data-theme="dark"` บน `<html>` และสีทั้งหมดอยู่ใน `src/app/globals.css` สามส่วน:
@@ -55,7 +59,6 @@ frontend/src/
 | ตัวแปร | ความหมาย |
 |---|---|
 | `NEXT_PUBLIC_API_URL` | ที่อยู่ของ API (ค่าเริ่มต้น `http://localhost:8000`) |
-| `NEXT_PUBLIC_DEMO_MODE` | `true` = เติมอีเมลและรหัสผ่านของบัญชี operator ตั้งต้นในหน้า login ให้ ต้องเป็น `false` เมื่อใช้งานจริง |
 
 ค่า `NEXT_PUBLIC_*` ถูกฝังลงในไฟล์ตอน build แก้ค่าแล้วต้อง build ใหม่
 

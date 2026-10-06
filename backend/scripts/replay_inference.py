@@ -9,7 +9,7 @@ Usage (api container):
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from arq import create_pool
 from arq.connections import RedisSettings

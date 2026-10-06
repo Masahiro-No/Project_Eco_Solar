@@ -91,6 +91,16 @@ solar_satellite_status_counter = meter.create_counter(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# Messages that do not belong to one job (model sync and loading). Written at once, unlike print in a container.
+log = logging.getLogger("inference_worker")
+if not log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+
 def setup_logger(job_id: str) -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"inference_{job_id}.log"
@@ -184,14 +194,23 @@ def _sync_best_model_from_minio(target_dir: Path) -> bool:
             target_dir.mkdir(parents=True, exist_ok=True)
             for f in required_files:
                 minio_client.fget_object("models", f"solar_lstm/{f}", str(target_dir / f))
-            print(f"[Model Sync] Pulled updated model (v{remote_meta.get('version', '1.0.0')}) from MinIO into '{target_dir}'")
+            log.info(f"[Model Sync] Pulled updated model (v{remote_meta.get('version', '1.0.0')}) from MinIO into '{target_dir}'")
         else:
-            print(f"[Model Sync] Local project model in '{target_dir}' is already up-to-date")
+            log.debug(f"[Model Sync] Local project model in '{target_dir}' is already up-to-date")
 
         return True
     except Exception as e:
-        print(f"[Model Sync Notice] MinIO not reachable or skipped ({e}). Loading local project model directly.")
+        log.warning(f"[Model Sync] MinIO not reachable or skipped ({e}). Loading local project model directly.")
         return False
+
+
+# A loaded model stays in memory until its files change (a retrain deploys new ones): five stations every
+# 10 minutes used to read the same files and build the same sessions again each time.
+_MODEL_CACHE: dict[str, tuple[tuple, Any]] = {}
+
+
+def _files_signature(paths) -> tuple:
+    return tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
 
 
 def _load_trained_solar_onnx():
@@ -212,12 +231,19 @@ def _load_trained_solar_onnx():
     if missing:
         raise RuntimeError(f"lstm_model_unavailable: missing {missing} in '{model_dir}'")
 
+    signature = _files_signature(files.values())
+    cached = _MODEL_CACHE.get("lstm")
+    if cached and cached[0] == signature:
+        return cached[1]
+
     session = ort.InferenceSession(str(files["solar_ghi_lstm.onnx"]))
     feature_scaler = joblib.load(str(files["feature_scaler.joblib"]))
     target_scaler = joblib.load(str(files["target_scaler.joblib"]))
     with open(files["model_meta.json"], "r", encoding="utf-8") as f:
         meta = json.load(f)
-    return session, feature_scaler, target_scaler, meta
+    loaded = (session, feature_scaler, target_scaler, meta)
+    _MODEL_CACHE["lstm"] = (signature, loaded)
+    return loaded
 
 
 def _get_convlstm_model_dir() -> Path:
@@ -272,14 +298,14 @@ def _sync_convlstm_from_minio(target_dir: Path) -> bool:
             target_dir.mkdir(parents=True, exist_ok=True)
             for f in required:
                 minio_client.fget_object("models", f"cloud_convlstm/{f}", str(target_dir / f))
-            print(f"[ConvLSTM Sync] Pulled ConvLSTM model from MinIO into '{target_dir}'")
+            log.info(f"[ConvLSTM Sync] Pulled ConvLSTM model from MinIO into '{target_dir}'")
         return True
     except Exception:
         return False
 
 
 def _load_trained_convlstm_onnx():
-    """Hybrid ConvLSTM model loader with project-first strategy and MinIO sync fallback."""
+    """The deployed ConvLSTM (synced from MinIO when it has a newer version), or None: no other file stands in for it."""
     try:
         import onnxruntime as ort
 
@@ -288,25 +314,22 @@ def _load_trained_convlstm_onnx():
 
         onnx_file = model_dir / "cloud_seq2seq_12to18.onnx"
         if not onnx_file.exists():
-            for fallback in [
-                Path("/workspace/Non_time_series/cloud_seq2seq_12to18.onnx"),
-                Path(__file__).resolve().parent.parent.parent / "Non_time_series" / "cloud_seq2seq_12to18.onnx",
-            ]:
-                if fallback.exists():
-                    onnx_file = fallback
-                    break
-
-        if not onnx_file.exists():
-            print(f"[ConvLSTM Warning] Model file not found in '{model_dir}'")
+            log.warning(f"[ConvLSTM] Model file not found in '{model_dir}': the satellite branch runs without a forecast")
             return None
+
+        signature = _files_signature([onnx_file])
+        cached = _MODEL_CACHE.get("convlstm")
+        if cached and cached[0] == signature:
+            return cached[1]
 
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 2
         session = ort.InferenceSession(str(onnx_file), opts, providers=["CPUExecutionProvider"])
-        print(f"[ConvLSTM Loader] Successfully loaded ConvLSTM from '{onnx_file}'")
+        _MODEL_CACHE["convlstm"] = (signature, session)
+        log.info(f"[ConvLSTM Loader] Loaded ConvLSTM from '{onnx_file}'")
         return session
     except Exception as e:
-        print(f"[ConvLSTM Loader Error] Failed to load ConvLSTM model: {e}")
+        log.error(f"[ConvLSTM Loader] Failed to load ConvLSTM model: {e}")
         return None
 
 

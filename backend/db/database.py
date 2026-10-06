@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -32,6 +33,28 @@ async def create_database_schema() -> None:
         await connection.run_sync(Base.metadata.create_all)
         await connection.run_sync(_ensure_prediction_columns)
         await connection.run_sync(_ensure_user_columns)
+        await connection.run_sync(_ensure_unique_rules)
+
+
+def _ensure_unique_rules(sync_conn) -> None:
+    """create_all() adds no rule to a table that already exists: add the unique rules of weather and frames.
+
+    When rows that break a rule are already stored the rule cannot be added: the API starts anyway and says so
+    (scripts/cleanup_test_data.py --only leftovers lists such rows).
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    from api.ingestion.model import UNIQUE_RULES
+
+    for model, key, name in UNIQUE_RULES:
+        try:
+            with sync_conn.begin_nested():
+                sync_conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {model.__tablename__} ({', '.join(key)})"))
+        except DBAPIError as e:
+            logging.getLogger("solar.api").warning(
+                f"[Schema] unique rule {name} not added, rows that break it are stored: {str(e.orig)[:200]}"
+            )
 
 
 def _ensure_prediction_columns(sync_conn) -> None:
@@ -157,15 +180,14 @@ async def seed_default_stations() -> None:
                 )
                 session.add(station)
 
-        # 2. Seed Default Operator User
-        user_stmt = select(User).where(User.email == "operator@solardss.io")
-        existing_user = (await session.execute(user_stmt)).scalar_one_or_none()
-        if not existing_user:
-            user = User(
-                email="operator@solardss.io",
-                password_hash=pwd_context.hash("operator1234"),
-            )
-            session.add(user)
+        # 2. Operator account, only when a password is configured (never a built-in default)
+        if settings.operator_password:
+            operator = (await session.execute(select(User).where(User.email == settings.operator_email))).scalar_one_or_none()
+            if operator is None:
+                session.add(User(email=settings.operator_email, password_hash=pwd_context.hash(settings.operator_password)))
+            elif not pwd_context.verify(settings.operator_password, operator.password_hash):
+                # OPERATOR_PASSWORD in .env is this account's password: changing it there and restarting the API changes it
+                operator.password_hash = pwd_context.hash(settings.operator_password)
 
         # 3. Admin account, only when a password is configured (never a built-in default)
         if settings.admin_password:

@@ -10,7 +10,7 @@ from api.auth.service import get_current_user, require_admin
 from api.ingestion.forecast_frames import read_forecast_frames
 from api.ingestion.schema import (
     DayFramesResponse,
-    IngestTriggerRequest,
+    CatchupRequest,
     IngestionStatusResponse,
     SatelliteFrameItem,
     WeatherRecentItem,
@@ -52,13 +52,13 @@ async def get_ingestion_status(
 
 
 async def trigger_auto_catchup(
-    payload: IngestTriggerRequest,
+    payload: CatchupRequest,
     db: AsyncSession = Depends(get_db_session),
     _: User = Depends(require_admin),
 ) -> dict:
     """สั่งตรวจสอบ Gap ของข้อมูลและดึงข้อมูลย้อนหลังทั้ง Weather Time-Series และภาพถ่ายดาวเทียม 12 เฟรมอัตโนมัติ"""
-    station_id = payload.station_id or "ST-001"
-    w_res = await IngestionService.auto_catchup_weather(db=db, station_id=station_id)
+    station_id = payload.station_id
+    w_res = await IngestionService.auto_catchup_weather(db=db, station_id=station_id, max_gap_days=payload.max_gap_days)
     s_res = await IngestionService.auto_catchup_satellite(db=db, station_id=station_id, count=12)
     return {
         "station_id": station_id,

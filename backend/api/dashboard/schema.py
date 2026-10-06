@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class AlertBreakdown(BaseModel):
@@ -47,5 +47,5 @@ class AlertFeedItem(BaseModel):
 
 
 class GrafanaLinksResponse(BaseModel):
-    system_health_dashboard_url: str
-    model_performance_dashboard_url: str
+    grafana_url: str
+    operations_dashboard_url: str

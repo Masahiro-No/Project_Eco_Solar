@@ -1,7 +1,7 @@
 import asyncio
 from datetime import date as date_type
 from typing import Optional
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User

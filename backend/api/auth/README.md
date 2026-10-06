@@ -24,7 +24,7 @@
 | `GET` | `/api/auth/me` | ดึงข้อมูลผู้ใช้ปัจจุบันที่ล็อกอินอยู่ | Yes (Bearer Token) |
 
 ## Roles
-- **`operator`**: ได้จากการสมัครเอง อ่านข้อมูลของระบบได้ (โซน Public)
+- **`operator`**: ได้จากการสมัครเอง อ่านข้อมูลของระบบได้ (โซน Public) บัญชี `operator@solardss.io` ถูกสร้างเมื่อตั้ง `OPERATOR_PASSWORD` ใน `.env` เท่านั้น ไม่มีรหัสผ่านตั้งต้นในโค้ด
 - **`admin`**: สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน จาก `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` ไม่มีทางสมัครเป็น admin ผ่าน API; admin เปลี่ยน role ของผู้อื่นได้ที่ `PATCH /api/users/{id}`
 - `get_current_user` (ต้องล็อกอิน) และ `require_admin` (ต้องเป็น admin) ใน `service.py` คือ dependency ที่ controller ของมอดูลอื่นใช้ ไม่มี token ได้ 401 role ไม่ถึงได้ 403
 
