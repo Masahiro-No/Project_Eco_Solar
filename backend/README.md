@@ -57,6 +57,7 @@ backend/
 - **ไม่มีข้อมูลจำลอง** ถ้าสถานียังไม่มีผลพยากรณ์ API ตอบว่าไม่มี ไม่สร้างค่าแทน
 - **ข้อมูลป้อน LSTM** สร้างที่ `api/inference/weather_grid.py`: จัดแถวสภาพอากาศลงช่อง 10 นาที เติมช่องว่างไม่เกิน 20 นาที ถ้ายังมีช่องว่างจะไม่พยากรณ์และคืนเหตุผล (`gap_in_history`, `insufficient_history`, `stale_data`)
 - **ingestion-worker ใช้โค้ดโฟลเดอร์นี้** (สร้างข้อมูลป้อนโมเดลและบันทึกผลพยากรณ์) แก้ backend แล้วต้อง restart ทั้ง `api` และ `ingestion-worker`
+- **ไฟล์ตั้งค่า** API และ ingestion-worker อ่าน `backend/.env` (ไม่อยู่ใน git สร้างจาก `backend/.env.example` แล้วใส่ `jwt_secret_key`)
 - **บัญชี admin** สร้างหรืออัปเดตรหัสผ่านตอน API เริ่มทำงาน จาก `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` บัญชี `operator@solardss.io` ใช้ `OPERATOR_PASSWORD` แบบเดียวกัน (ไม่ตั้ง = ไม่สร้าง) ผู้ที่สมัครเองได้ role `operator` เสมอ
 - **กราฟทั้งวัน** `GET /inference/predictions-by-date?lead_minutes=N` คืนค่าพยากรณ์ของทั้งวันสำหรับหน้าระบบพยากรณ์: ช่องเวลาที่ผ่านมาแล้วใช้รอบล่าสุดที่ทำนายล่วงหน้าอย่างน้อย N นาที (ต่างได้ไม่เกิน 20 นาที) ช่องเวลาในอนาคตใช้รอบล่าสุด พร้อม MAE เทียบค่าวัดจริงที่ระยะนั้น
 - **ภาพเมฆรายวัน** `GET /ingestion/satellite/{id}/day-frames` คืนภาพจริงของวัน และสำหรับวันนี้ ภาพที่ ConvLSTM ทำนายในรอบล่าสุดจาก bucket `satellite-forecast`

@@ -234,28 +234,53 @@ API ตรวจ token และ role ที่ทุก endpoint ของข�
 
 ## 5. เริ่มใช้งาน
 
+ต้องมี Docker Desktop และอินเทอร์เน็ต (ระบบดึงสภาพอากาศจาก Open-Meteo และภาพดาวเทียมจาก NICT) ไม่ต้องมี GPU การ build ครั้งแรกใช้เวลานานเพราะ image ของ worker มีขนาดใหญ่
+
+**1. สร้างไฟล์ตั้งค่าสองไฟล์** (ทั้งสองไฟล์ไม่อยู่ใน git ทุกเครื่องต้องสร้างเอง)
+
 ```bash
 cp .env.example .env
 ```
 
-แก้ `.env`:
+```bash
+cp backend/.env.example backend/.env
+```
 
-- `LABEL_STUDIO_API_KEY` — Personal Access Token จาก Label Studio (Account & Settings)
+**2. แก้ `backend/.env`** ใส่ `jwt_secret_key` เป็นข้อความสุ่มของเครื่องนี้ อย่างน้อย 16 ตัวอักษร (ใช้เซ็น token ตอนล็อกอิน ถ้าเว้นว่าง API จะไม่เริ่มทำงาน) ค่าอื่นในไฟล์ตรงกับ `compose.yml` อยู่แล้ว สร้างข้อความสุ่มได้ด้วย
+
+```bash
+docker run --rm python:3.12-slim python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+**3. แก้ `.env`**
+
 - `ADMIN_PASSWORD` — รหัสผ่านบัญชีผู้ดูแล (อย่างน้อย 8 ตัว) บัญชีถูกสร้างตอน API เริ่มทำงาน
 - `OPERATOR_PASSWORD` — รหัสผ่านของบัญชี `operator@solardss.io` (ไม่บังคับ) ถ้าตั้งไว้ บัญชีจะถูกสร้างหรือเปลี่ยนรหัสผ่านตอน API เริ่มทำงาน ถ้าไม่ตั้ง ระบบไม่สร้างบัญชีนี้
 - `ENABLE_RETRAIN` — `true` เพื่อให้ retrain อัตโนมัติ
+- `LABEL_STUDIO_API_KEY` — เว้นไว้ก่อน ใส่ในขั้นที่ 5
+
+**4. เปิดระบบ**
 
 ```bash
 docker compose up -d
 ```
 
-เปิด http://localhost:3000 รอบพยากรณ์แรกจะมาภายใน 10 นาที
+เปิด http://localhost:3000 แล้วล็อกอินด้วย `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ในเครื่องใหม่ระบบจะดึงสภาพอากาศย้อนหลัง 2 วันและภาพดาวเทียม 12 เฟรมล่าสุดเอง ผลพยากรณ์แรกมาภายในไม่กี่นาทีหลัง worker เริ่มทำงาน จากนั้นทุก 10 นาที
+
+**5. ต่อ Label Studio** (ใช้กับหน้าบันทึกค่าวัดจริงและการ retrain LSTM การพยากรณ์ไม่ต้องใช้)
+
+เปิด http://localhost:8080 สมัครบัญชี แล้วคัดลอก Personal Access Token จาก Account & Settings มาใส่ที่ `LABEL_STUDIO_API_KEY` ใน `.env` จากนั้น
+
+```bash
+docker compose up -d api
+```
+
+**สิ่งที่ไม่ได้มากับ git** ค่า GHI ที่วัดจริง ประวัติพยากรณ์ และประวัติ retrain อยู่ในฐานข้อมูล Label Studio และ MLflow ของเครื่องที่รัน เครื่องใหม่จึงเริ่มจากว่าง ส่วนไฟล์โมเดลทั้งสองตัวและค่า calibration อยู่ใน `model/` และมากับ git
 
 บัญชีผู้ใช้
 
 - ผู้ดูแล (admin): อีเมลและรหัสผ่านคือ `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` ถ้าจะเปลี่ยนรหัสผ่าน ให้แก้ใน `.env` แล้วสั่ง `docker compose up -d api`
 - ผู้ควบคุมระบบ (operator): สมัครเองได้ที่แท็บ Sign Up ของหน้า login (หรือใช้บัญชี `operator@solardss.io` เมื่อตั้ง `OPERATOR_PASSWORD` ใน `.env` ไม่มีรหัสผ่านตั้งต้นในโค้ด) บัญชีที่สมัครได้สิทธิ์ operator เสมอ สิทธิ์ admin ให้ได้โดย admin เท่านั้น
-- บัญชี operator ตั้งต้นสำหรับทดลอง อยู่ในโค้ด seed ที่ `backend/db/database.py`
 
 ### เมื่อแก้โค้ด
 

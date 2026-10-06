@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +20,8 @@ class Settings(BaseSettings):
     minio_endpoint: str
     minio_access_key: str
     minio_secret_key: str
-    jwt_secret_key: str
+    # signs the login tokens; every machine sets its own in backend/.env (see backend/.env.example)
+    jwt_secret_key: str = Field(min_length=16)
     jwt_algorithm: str
     access_token_expire_minutes: int
     redis_host: str = "localhost"
