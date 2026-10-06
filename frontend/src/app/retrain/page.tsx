@@ -33,6 +33,8 @@ function Outcome({ run }: { run: RetrainRun }) {
 const fixed = (v: number | null | undefined, digits: number) => (v === null || v === undefined ? '—' : v.toFixed(digits));
 const beforeAfter = (a: unknown, b: unknown, digits: number) =>
   typeof a === 'number' && typeof b === 'number' ? `${a.toFixed(digits)} → ${b.toFixed(digits)}` : '—';
+/** Runs before 6 Oct 2026 evening checked the model with measured GHI in its input: their real_mae is not comparable. */
+const oldCheck = (r: RetrainRun) => r.metric === 'real_mae' && (r.details.min_improvement ?? null) === null;
 
 /** Proof that both models are retrained: deployed versions, what is pending and every run with its verdict. */
 export default function RetrainPage() {
@@ -221,7 +223,9 @@ export default function RetrainPage() {
                     <td className={td}>
                       <Outcome run={r} />
                     </td>
-                    <td className={`${td} text-right tabular-nums`}>{r.metric === 'real_mae' ? `${fixed(r.before, 1)} → ${fixed(r.after, 1)}` : '—'}</td>
+                    <td className={`${td} text-right tabular-nums`}>
+                      {r.metric === 'real_mae' ? `${fixed(r.before, 1)} → ${fixed(r.after, 1)}${oldCheck(r) ? ' *' : ''}` : '—'}
+                    </td>
                     <td className={`${td} text-right tabular-nums`}>{beforeAfter(r.details.val_mae_before, r.details.val_mae_after, 1)}</td>
                     <td className={`${td} text-right tabular-nums`}>{r.details.label_count ?? '—'}</td>
                     <td className={`${td} whitespace-nowrap tabular-nums`}>{r.details.holdout_day ?? '—'}</td>
@@ -233,6 +237,7 @@ export default function RetrainPage() {
           </div>
         )}
         <p className="mt-2 text-[12px] leading-snug text-slate-600">{t('rt_lstm_cols_help')}</p>
+        {status?.history.lstm.some(oldCheck) && <p className="mt-1 text-[12px] leading-snug text-slate-600">{t('rt_lstm_old_check_note')}</p>}
       </Panel>
 
       {status && <LearningCurves model="convlstm" runs={status.history.convlstm} />}

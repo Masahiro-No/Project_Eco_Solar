@@ -99,11 +99,8 @@ def make_windows(
     lookback: int = LOOKBACK_STEPS,
     horizon: int = FORECAST_STEPS,
     stride: int = 1,
-    return_label_mask: bool = False,
 ):
     """ตัด window ที่ไม่มี NaN เลยตลอดช่วง lookback+horizon.
-
-    return_label_mask=True คืนค่าเพิ่มอีกตัว: label_mask (n, horizon) bool บอกว่าช่องพยากรณ์ไหนเป็น GHI ที่วัดจริง
 
     Returns:
         X (n, lookback, 16) หน่วยจริง, Y (n, horizon) GHI จริง,
@@ -117,8 +114,6 @@ def make_windows(
         np.empty((0,), "datetime64[ns]"),
         np.empty((0,), bool),
     )
-    if return_label_mask:
-        empty = empty + (np.empty((0, horizon), bool),)
     if len(frame) < span:
         return empty
     feats = frame[ALIGNED_FEATURE_COLS].to_numpy(dtype=np.float32)
@@ -127,7 +122,7 @@ def make_windows(
     bad = np.isnan(feats).any(axis=1).astype(np.int32)
     csum = np.concatenate([[0], np.cumsum(bad)])
 
-    xs, ys, starts, has_label, masks = [], [], [], [], []
+    xs, ys, starts, has_label = [], [], [], []
     idx = frame.index.tz_convert("UTC").tz_localize(None).to_numpy()
     for s in range(0, len(frame) - span + 1, stride):
         if csum[s + span] - csum[s] != 0:
@@ -136,84 +131,104 @@ def make_windows(
         ys.append(ghi[s + lookback:s + span])
         starts.append(idx[s])
         has_label.append(bool(lab[s + lookback:s + span].any()))
-        masks.append(lab[s + lookback:s + span].copy())
     if not xs:
         return empty
-    out = (np.stack(xs), np.stack(ys), np.array(starts, dtype="datetime64[ns]"), np.array(has_label, dtype=bool))
-    return out + (np.stack(masks),) if return_label_mask else out
+    return np.stack(xs), np.stack(ys), np.array(starts, dtype="datetime64[ns]"), np.array(has_label, dtype=bool)
 
 
-def label_holdout(
+def make_live_windows(
+    inputs: pd.DataFrame,
+    measured: pd.Series,
+    lookback: int = LOOKBACK_STEPS,
+    horizon: int = FORECAST_STEPS,
+    stride: int = 1,
+):
+    """window สำหรับเรียนจากค่าที่วัดจริง ในเงื่อนไขเดียวกับตอนใช้งาน
+
+    ตอนพยากรณ์จริง โมเดลได้รับเฉพาะสภาพอากาศ (ค่าที่วัดจริงมาถึงทีหลังเป็นไฟล์ ไม่เคยอยู่ในข้อมูลป้อน)
+    ข้อมูลป้อนของ window จึงมาจาก `inputs` ที่สร้างโดยไม่ใส่ label ส่วนเป้าหมายคือค่าที่วัดจริงของช่วงพยากรณ์
+
+    Args:
+        inputs: ผลของ build_station_frame(weather) ที่ไม่ได้ส่ง labels
+        measured: Series index เดียวกับ inputs, ค่า = GHI ที่วัดจริง (NaN = ช่องนั้นไม่มีค่าวัด)
+    Returns:
+        X (n, lookback, 16) หน่วยจริง, Y (n, horizon) GHI ที่วัดจริง (0 ในช่องที่ไม่มีค่าวัด),
+        mask (n, horizon) bool ช่องที่มีค่าวัดจริงตอนกลางวัน (ใช้คิด loss และ MAE),
+        starts (n,) เวลา UTC ของช่องแรกของ window — คืนเฉพาะ window ที่ mask มี True อย่างน้อย 1 ช่อง
+    """
+    span = lookback + horizon
+    empty = (
+        np.empty((0, lookback, len(ALIGNED_FEATURE_COLS)), np.float32),
+        np.empty((0, horizon), np.float32),
+        np.empty((0, horizon), bool),
+        np.empty((0,), "datetime64[ns]"),
+    )
+    if len(inputs) < span:
+        return empty
+    feats = inputs[ALIGNED_FEATURE_COLS].to_numpy(dtype=np.float32)
+    clearsky = inputs["Clearsky GHI"].to_numpy(dtype=np.float32)
+    meas = measured.reindex(inputs.index).to_numpy(dtype=np.float32)
+    usable = ~np.isnan(meas) & (clearsky >= NIGHT_CLEARSKY_GHI)   # กลางคืนผลของโมเดลไม่ถูกใช้ จึงไม่เรียนและไม่วัด
+    bad = np.isnan(feats).any(axis=1).astype(np.int32)
+    csum = np.concatenate([[0], np.cumsum(bad)])
+
+    xs, ys, masks, starts = [], [], [], []
+    idx = inputs.index.tz_convert("UTC").tz_localize(None).to_numpy()
+    for s in range(0, len(inputs) - span + 1, stride):
+        target = slice(s + lookback, s + span)
+        if csum[s + span] - csum[s] != 0 or not usable[target].any():
+            continue
+        xs.append(feats[s:s + lookback])
+        ys.append(np.nan_to_num(meas[target], nan=0.0))
+        masks.append(usable[target].copy())
+        starts.append(idx[s])
+    if not xs:
+        return empty
+    return np.stack(xs), np.stack(ys), np.stack(masks), np.array(starts, dtype="datetime64[ns]")
+
+
+def measured_day_split(
     starts: np.ndarray,
-    label_mask: np.ndarray,
+    mask: np.ndarray,
     lookback: int = LOOKBACK_STEPS,
     min_points: int = 20,
 ) -> Optional[dict]:
-    """กันค่าที่วัดจริงของ "วันล่าสุดที่มี label" ไว้ตรวจ (ไม่ใช้เทรน) เพื่อวัดว่าโมเดลใหม่แม่นขึ้นเทียบกับค่าจริงหรือไม่.
+    """แบ่ง window ของ make_live_windows ตามวัน (เวลาไทย) ของช่องพยากรณ์ที่มีค่าวัดจริง
 
-    ต้องมี label อย่างน้อย 2 วัน (วันหนึ่งไว้เทรน วันล่าสุดไว้ตรวจ) และจุดที่ตรวจได้อย่างน้อย min_points
-    Returns None ถ้าทำไม่ได้ มิฉะนั้น dict:
-        day        วันที่กันไว้ (เวลาไทย, 'YYYY-MM-DD')
-        val_idx    window ที่ช่วงพยากรณ์มี label ของวันนั้น
-        val_mask   (len(val_idx), horizon) bool: ช่องพยากรณ์ที่เป็น label ของวันนั้น (วัด MAE เฉพาะช่องเหล่านี้)
-        touches    (n,) bool: window ที่ช่วงเวลาทั้งหมดแตะวันนั้น ต้องตัดออกจาก train ทั้งหมด
+    - วันล่าสุดที่มีค่าวัดจริง = วันตัดสิน (gate): ไม่ใช้เทรน ไม่ใช้เลือก epoch ใช้วัดว่าโมเดลใหม่ดีกว่าเดิมหรือไม่เท่านั้น
+    - วันก่อนหน้านั้น = วันเลือก epoch (มีเมื่อมีค่าวัดจริงตั้งแต่ 3 วันขึ้นไป): ไม่ใช้เทรน
+    - วันที่เหลือ = ข้อมูลเทรน; window ที่ช่วงพยากรณ์แตะวันตัดสินหรือวันเลือก epoch ถูกตัดออกจากเทรน
+
+    Returns None เมื่อมีค่าวัดจริงน้อยกว่า 2 วัน หรือวันตัดสินมีค่าวัดจริงน้อยกว่า min_points มิฉะนั้น dict:
+        gate_day, select_day ('YYYY-MM-DD' หรือ None), train_idx,
+        gate_idx, gate_mask (len(gate_idx), horizon), select_idx, select_mask
     """
-    if len(starts) == 0 or not label_mask.any():
+    if len(starts) == 0 or not mask.any():
         return None
-    horizon = label_mask.shape[1]
+    horizon = mask.shape[1]
     step = np.timedelta64(10, "m")
-    th = np.timedelta64(7, "h")
-    target_times = starts[:, None] + step * (lookback + np.arange(horizon))[None, :]   # เวลาของแต่ละช่องพยากรณ์ (UTC)
-    target_days = (target_times + th).astype("datetime64[D]")
-    label_days = np.unique(target_days[label_mask])
-    if len(label_days) < 2:
+    target_times = starts[:, None] + step * (lookback + np.arange(horizon))[None, :]
+    days = (target_times + np.timedelta64(7, "h")).astype("datetime64[D]")
+    measured_days = np.unique(days[mask])
+    if len(measured_days) < 2:
         return None
-    day = label_days[-1]
-    val_mask_all = label_mask & (target_days == day)
-    val_idx = np.where(val_mask_all.any(axis=1))[0]
-    if int(val_mask_all.sum()) < min_points:
+    gate_day = measured_days[-1]
+    select_day = measured_days[-2] if len(measured_days) >= 3 else None
+    gate_mask = mask & (days == gate_day)
+    if int(gate_mask.sum()) < min_points:
         return None
-    first_day = (starts + th).astype("datetime64[D]")
-    last_day = (starts + step * (lookback + horizon - 1) + th).astype("datetime64[D]")
-    touches = (first_day <= day) & (last_day >= day)
-    return {"day": str(day), "val_idx": val_idx, "val_mask": val_mask_all[val_idx], "touches": touches}
 
-
-def split_by_day(
-    starts: np.ndarray,
-    has_label: np.ndarray,
-    lookback: int = LOOKBACK_STEPS,
-    horizon: int = FORECAST_STEPS,
-    val_every: int = 5,
-) -> tuple[np.ndarray, np.ndarray]:
-    """แบ่ง train/val ตามวัน (เวลาไทย) โดยไม่ให้เป้าหมาย (target) ของ validation รั่วเข้า train.
-
-    - "วันของ window" = วันที่ช่วงพยากรณ์เริ่ม; ทุก ๆ วันที่ val_every เป็นวัน validation
-    - วันที่มี label จะไม่ถูกใช้เป็น validation (label ต้องได้เทรนเสมอ)
-    - window ที่ช่วงเวลารวม (lookback+horizon) แตะวัน validation จะถูกตัดออกจาก train ยกเว้น window ที่มี label
-      (หน้าต่างพวกนี้ target อยู่นอกวัน validation อยู่แล้ว; มีเพียง input ที่ซ้อนกับวัน validation)
-    Returns: (train_idx, val_idx)
-    """
-    empty = np.array([], dtype=int)
-    if len(starts) == 0:
-        return empty, empty
-    step = np.timedelta64(10, "m")
-    to_day = lambda a: (a + np.timedelta64(7, "h")).astype("datetime64[D]").astype(np.int64)  # noqa: E731
-    d_first = to_day(starts)                                   # วันของช่องแรกใน window
-    d_key = to_day(starts + step * lookback)                   # วันที่ช่วงพยากรณ์เริ่ม
-    d_last = to_day(starts + step * (lookback + horizon - 1))  # วันของช่องสุดท้าย
-
-    all_days = np.unique(np.concatenate([d_first, d_key, d_last]))
-    label_days = set(np.concatenate([d_key[has_label], d_last[has_label]]).tolist()) if has_label.any() else set()
-    val_days = np.array(
-        [d for i, d in enumerate(all_days) if i % val_every == val_every - 1 and int(d) not in label_days],
-        dtype=np.int64,
-    )
-
-    in_val = np.isin(d_key, val_days) & np.isin(d_last, val_days)
-    touches_val = np.isin(d_first, val_days) | np.isin(d_key, val_days) | np.isin(d_last, val_days)
-    # window ที่ target ล้ำเข้าวัน validation (key ไม่ใช่ val แต่ last เป็น val) ก็ถูกตัดจาก train ผ่าน touches_val
-    train_mask = (~touches_val) | has_label
-    val_mask = np.isin(d_key, val_days) & ~has_label
-    del in_val
-    return np.where(train_mask & ~val_mask)[0], np.where(val_mask)[0]
+    on_gate = (days == gate_day).any(axis=1)
+    on_select = (days == select_day).any(axis=1) if select_day is not None else np.zeros(len(starts), bool)
+    gate_idx = np.where(gate_mask.any(axis=1))[0]
+    select_mask = mask & (days == select_day) if select_day is not None else np.zeros_like(mask)
+    select_idx = np.where(select_mask.any(axis=1) & ~on_gate)[0]
+    return {
+        "gate_day": str(gate_day),
+        "select_day": str(select_day) if select_day is not None else None,
+        "train_idx": np.where(~on_gate & ~on_select)[0],
+        "gate_idx": gate_idx,
+        "gate_mask": gate_mask[gate_idx],
+        "select_idx": select_idx,
+        "select_mask": select_mask[select_idx],
+    }

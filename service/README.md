@@ -27,7 +27,7 @@ service/
 │   └── train_worker.py           งานของ trainer: retrain สองงาน และ check_satellite_calibration
 ├── training/
 │   ├── train.py                  เทรน LSTM ตั้งต้นและทดลองความยาวข้อมูลย้อนหลัง (--ablation)
-│   ├── features.py               จัดข้อมูลลงช่อง 10 นาที สร้าง window และกันวันที่มี label ไว้ตรวจ
+│   ├── features.py               จัดข้อมูลลงช่อง 10 นาที สร้าง window และแบ่งวันเทรน วันเลือก epoch วันตัดสิน
 │   ├── curves.py                 บันทึกค่าราย epoch ของรอบ retrain ลง MLflow (กราฟการเรียนรู้)
 │   ├── retrain_timeseries.py     fine-tune LSTM จาก label
 │   ├── retrain_convlstm.py       retrain ConvLSTM จากภาพจริง (--status, --backfill-days N, --run)
@@ -36,7 +36,7 @@ service/
 │   ├── onnx_weights.py           โหลดน้ำหนักจาก ONNX กลับเข้าโมเดล PyTorch เพื่อเทรนต่อ
 │   └── backtest_cloud.py         ทดสอบย้อนหลังความแม่นของ % เมฆ
 ├── models/solar_lstm.py          โครงสร้าง LSTM (PyTorch) ที่ใช้ตอนเทรน; โครงสร้าง ConvLSTM อยู่ใน retrain_convlstm.py
-└── tests/                        ชุดทดสอบ 47 รายการ และการเทียบสูตรสองฝั่ง 3 รายการ
+└── tests/                        ชุดทดสอบ 48 รายการ และการเทียบสูตรสองฝั่ง 3 รายการ
 ```
 
 README ของโฟลเดอร์ย่อย: [workers](workers/README.md) · [training](training/README.md) · [models](models/README.md) · [tests](tests/README.md)
@@ -58,14 +58,14 @@ README ของโฟลเดอร์ย่อย: [workers](workers/README.m
 
 | งาน | เริ่มเมื่อ | เกณฑ์รับโมเดลใหม่ |
 |---|---|---|
-| `train_timeseries_lstm` | ผู้ดูแลบันทึกค่า GHI จริง (API นัดงานหลังรอ 5 นาทีเพื่อรวม label ที่ส่งใกล้กัน) | มี label 2 วันขึ้นไป: ต้องลด MAE เทียบกับค่าวัดจริงของวันล่าสุดที่กันไว้ และไม่แย่ลงเกิน 5% บนชุดตรวจที่ไม่มี label; มี label วันเดียว: MAE บนชุดตรวจไม่สูงกว่าเดิม |
+| `train_timeseries_lstm` | ผู้ดูแลบันทึกค่า GHI จริง (API นัดงานหลังรอ 5 นาทีเพื่อรวม label ที่ส่งใกล้กัน) | MAE เทียบกับค่าวัดจริงของวันล่าสุดที่กันไว้ลดลงอย่างน้อย 3% (ป้อนข้อมูลแบบเดียวกับตอนพยากรณ์จริง); มีค่าวัดจริงไม่ถึง 2 วัน: ข้ามรอบ |
 | `train_convlstm_nowcaster` | มีภาพกลางวันใหม่ครบ 50 เวลาสแกน | MSE บนชุดตรวจ (ช่วงเวลาล่าสุด) ไม่สูงกว่าเดิม; ภาพที่ผู้ดูแลปฏิเสธที่หน้าตรวจภาพไม่เข้าชุดเทรน |
 
 ทั้งสองงานบันทึกค่าของแต่ละ epoch (loss บนข้อมูลเทรน ค่าคลาดเคลื่อนบนข้อมูลตรวจ learning rate) ลง MLflow เป็น metric `epoch_*` โดย epoch 0 คือโมเดลก่อนเริ่มรอบ หน้า *สถานะ retrain* วาดเป็นกราฟการเรียนรู้
 
 งานที่สามของ trainer คือ `check_satellite_calibration`: API นัดให้หลังผู้ดูแลบันทึกค่าวัดจริง งานนี้วัดความคลาดของสูตรแสงจากภาพดาวเทียมที่ทุกสถานีที่มีค่าวัดจริง (ต้องมีอย่างน้อย 30 คู่ที่มีภาพเวลาเดียวกัน) แล้วบันทึกผลลงไฟล์ calibration โดยไม่เปลี่ยนสูตร
 
-ค่าที่ปรับได้อยู่ใน environment ของ `trainer-worker` ใน `compose.yml` เช่น `RETRAIN_LOOKBACK_DAYS`, `CONVLSTM_RETRAIN_THRESHOLD`, `CONVLSTM_LOOKBACK_DAYS`
+ค่าที่ปรับได้อยู่ใน environment ของ `trainer-worker` ใน `compose.yml` เช่น `RETRAIN_LOOKBACK_DAYS`, `RETRAIN_MIN_IMPROVEMENT`, `CONVLSTM_RETRAIN_THRESHOLD`, `CONVLSTM_LOOKBACK_DAYS`
 
 ```bash
 docker exec trainer-worker sh -c 'cd /workspace && python -m service.training.retrain_convlstm --status'
