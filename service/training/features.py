@@ -208,25 +208,28 @@ def measured_slots_per_day(starts: np.ndarray, mask: np.ndarray, lookback: int =
     return {str(d): int(c) for d, c in zip(days, counts)}
 
 
-def day_folds(days: np.ndarray, mask: np.ndarray, max_folds: int = 7) -> list[dict]:
-    """แบ่งวันที่มีค่าวัดจริงเป็นกลุ่ม ให้ทุกวันถูกกันไว้ตรวจหนึ่งครั้ง (cross-validation ตามวัน)
+def day_folds(days: np.ndarray, mask: np.ndarray, max_folds: int = 7, test_on: Optional[np.ndarray] = None) -> list[dict]:
+    """แบ่งวันที่ใช้ตรวจเป็นกลุ่ม ให้ทุกวันถูกกันไว้ตรวจหนึ่งครั้ง (cross-validation ตามวัน)
 
     วันเรียงตามเวลาแล้วแจกเข้ากลุ่มทีละวันวนไป: มีไม่เกิน max_folds วัน = กันทีละวัน
     window ที่ช่องพยากรณ์แตะวันของกลุ่มที่กันไว้ไม่ถูกใช้เทรนในรอบของกลุ่มนั้น
 
     Args:
         days: ผลของ forecast_days, mask: ผลของ make_live_windows
-    Returns [] เมื่อมีค่าวัดจริงน้อยกว่า 2 วัน มิฉะนั้น list ของ dict:
+        test_on: (n, horizon) bool ช่องที่ใช้ตรวจได้ (None = ทุกช่องที่มีค่าวัดจริง) ใช้ตัดวันที่โมเดลที่ใช้งานอยู่
+            เคยเทรนไปแล้วออกจากการตรวจ วันเหล่านั้นยังใช้เทรนได้
+    Returns [] เมื่อไม่มีวันให้ตรวจ หรือมีค่าวัดจริงน้อยกว่า 2 วัน มิฉะนั้น list ของ dict:
         days (list 'YYYY-MM-DD'), train_idx, test_idx, test_mask (len(test_idx), horizon)
     """
-    measured = np.unique(days[mask]) if mask.any() else np.array([], "datetime64[D]")
-    k = min(len(measured), max_folds)
-    if k < 2:
+    check = mask if test_on is None else mask & test_on
+    if not check.any() or len(np.unique(days[mask])) < 2:
         return []
+    measured = np.unique(days[check])
+    k = min(len(measured), max_folds)
     folds = []
     for f in range(k):
         on_held = np.isin(days, measured[f::k])
-        test_mask = mask & on_held
+        test_mask = check & on_held
         test_idx = np.where(test_mask.any(axis=1))[0]
         folds.append({
             "days": [str(d) for d in measured[f::k]],

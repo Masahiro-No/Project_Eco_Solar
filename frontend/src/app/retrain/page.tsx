@@ -249,7 +249,7 @@ export default function RetrainPage() {
                     <td className={`${td} text-right tabular-nums`}>{r.details.label_count ?? '—'}</td>
                     <td className={`${td} whitespace-nowrap tabular-nums`}>
                       {r.details.holdout_day ?? '—'}
-                      {r.details.measured_days ? ` (${r.details.measured_days} ${t('rt_days_unit')})` : ''}
+                      {(r.details.test_days ?? r.details.measured_days) ? ` (${r.details.test_days ?? r.details.measured_days} ${t('rt_days_unit')})` : ''}
                     </td>
                     <td className={td}>{r.outcome === 'rejected' ? reasonText(r.reason) : r.gate === 'measured_ghi' ? t('rt_gate_measured') : t('rt_gate_weather')}</td>
                   </tr>

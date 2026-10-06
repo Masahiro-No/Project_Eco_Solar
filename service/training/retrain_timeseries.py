@@ -6,10 +6,13 @@
   3. อ่าน weather_history จาก PostgreSQL + label ทั้งหมดจาก Label Studio -> window ที่ข้อมูลป้อนมาจากสภาพอากาศอย่างเดียว
      (แบบที่โมเดลได้รับตอนพยากรณ์จริง) และเป้าหมายคือ GHI ที่วัดจริงของช่วงพยากรณ์
   4. นับวันที่มีค่าวัดจริงที่รอบก่อนยังไม่เคยใช้: ยังไม่ครบ RETRAIN_MIN_NEW_DAYS -> บันทึกจำนวนไว้ให้หน้าเว็บแล้วจบรอบ
-  5. cross-validation ตามวัน: กันวันที่มีค่าวัดจริงไว้ตรวจทีละกลุ่มจนครบทุกวัน แต่ละกลุ่มเริ่มจากโมเดลที่ใช้งานอยู่
-     แล้ว fine-tune จากวันที่เหลือ (loss เฉพาะช่องที่มีค่าวัดจริง) ได้ MAE รวมทุกวันของแต่ละ epoch
-  6. deploy เมื่อ MAE รวมทุกวันที่ epoch ที่ดีที่สุดลดลงอย่างน้อย RETRAIN_MIN_IMPROVEMENT -> เทรนจากทุกวันด้วยจำนวน epoch นั้น,
+  5. cross-validation ตามวัน บนวันที่โมเดลที่ใช้งานอยู่ยังไม่เคยเทรน (model_meta.json: retrain.trained_days):
+     กันวันเหล่านั้นไว้ตรวจทีละกลุ่มจนครบ แต่ละกลุ่มเริ่มจากโมเดลที่ใช้งานอยู่ แล้ว fine-tune จากวันที่เหลือทั้งหมด
+     รวมวันที่เคยเทรนแล้ว (loss เฉพาะช่องที่มีค่าวัดจริง) ได้ MAE รวมทุกวันที่ตรวจของแต่ละ epoch
+     วันที่โมเดลเคยเทรนแล้วไม่ใช้ตรวจ: โมเดลเดิมจะดูดีกว่าความจริงบนวันที่เคยเห็นคำตอบ
+  6. deploy เมื่อ MAE รวมที่ epoch ที่ดีที่สุดลดลงอย่างน้อย RETRAIN_MIN_IMPROVEMENT -> เทรนจากทุกวันด้วยจำนวน epoch นั้น,
      export ONNX, ตรวจเทียบ onnxruntime, สำรองของเดิม (เก็บ 3 เวอร์ชัน), เขียนไฟล์ local, อัปโหลด MinIO (meta ขึ้นทีหลังสุด)
+     และจดวันที่โมเดลใหม่เทรนไปแล้วลง retrain.trained_days
 
 หมายเหตุ: ทุกครั้งที่รัน label "ทั้งหมด" ในช่วงข้อมูลจะถูกนำมาใช้ (ไม่ใช่เฉพาะ label ใหม่) และเริ่มจากโมเดลที่ใช้งานอยู่เสมอ.
 """
@@ -446,7 +449,8 @@ def execute_timeseries_retrain(
 
         frames = load_training_frames(engine, lookback_days, labels_df)
         min_slots = _env_int("RETRAIN_MIN_DAY_SLOTS", 6)   # วันที่มีค่าวัดจริงน้อยกว่านี้ (1 ชั่วโมง) ยังไม่นับเป็นวันใหม่
-        Xs, Ys, Ms, starts, station_days = [], [], [], [], set()
+        trained = set((meta.get("retrain") or {}).get("trained_days") or [])   # 'สถานี|วัน' ที่โมเดลที่ใช้งานอยู่เคยเทรนแล้ว
+        Xs, Ys, Ms, starts, seen, station_days, all_days = [], [], [], [], [], set(), set()
         for station_id, frame in frames.items():
             if frame["measured"] is None:
                 continue
@@ -454,13 +458,18 @@ def execute_timeseries_retrain(
             logger.info(f"  {station_id}: {len(frame['inputs'])} ช่องเวลา -> {len(X)} windows ที่มีค่าวัดจริง")
             if len(X):
                 Xs.append(X), Ys.append(Y), Ms.append(M), starts.append(st)
-                station_days |= {f"{station_id}|{day}" for day, n in measured_slots_per_day(st, M, lookback).items() if n >= min_slots}
+                slots = measured_slots_per_day(st, M, lookback)
+                station_days |= {f"{station_id}|{day}" for day, n in slots.items() if n >= min_slots}
+                all_days |= {f"{station_id}|{day}" for day in slots}
+                seen_days = np.array([day for day in slots if f"{station_id}|{day}" in trained], dtype="datetime64[D]")
+                seen.append(np.isin(forecast_days(st, lookback), seen_days))
         if not Xs:
             return {"status": "skipped", "reason": "no_complete_windows", "message": f"weather_history ไม่พอสำหรับ window {(lookback + FORECAST_STEPS) / 6:g} ชม. ที่มีค่าวัดจริง"}
 
         # สะสมค่าวัดจริงของวันใหม่ให้ครบก่อน: รอบที่ได้ข้อมูลเพิ่มวันเดียวให้ผลตามสภาพอากาศของวันนั้น ไม่ใช่ตามโมเดล
         days_needed = _env_int("RETRAIN_MIN_NEW_DAYS", 7)
-        new_days = days_with_new_values(station_days, set(json.loads(lock.get(USED_DAYS_KEY) or "[]")))
+        used = lock.get(USED_DAYS_KEY)   # ไม่มีบันทึก (เช่น Redis ถูกล้าง): ถือว่าใช้ไปแล้วเท่าที่โมเดลเคยเทรน
+        new_days = days_with_new_values(station_days, set(json.loads(used)) if used else trained)
 
         def save_counter(count: int) -> None:
             lock.set(STATUS_KEY, json.dumps({
@@ -485,9 +494,18 @@ def execute_timeseries_retrain(
                 "message": f"มีค่าวัดจริงของวันใหม่ {len(new_days)} วัน จะ retrain เมื่อครบ {days_needed} วัน",
             }
 
-        # 5. cross-validation ตามวัน: ทุกวันที่มีค่าวัดจริงถูกกันไว้ตรวจหนึ่งครั้ง โมเดลที่ถูกวัดไม่เคยเห็นวันนั้น
+        # 5. cross-validation ตามวัน: ตรวจเฉพาะวันที่โมเดลที่ใช้งานอยู่ยังไม่เคยเทรน โมเดลที่ถูกวัดก็ไม่เคยเห็นวันนั้น
         X_all, Y_all, M_all, starts_all = np.concatenate(Xs), np.concatenate(Ys), np.concatenate(Ms), np.concatenate(starts)
-        folds = day_folds(forecast_days(starts_all, lookback), M_all, max_folds=_env_int("RETRAIN_CV_FOLDS", 7))
+        days = forecast_days(starts_all, lookback)
+        unseen = M_all & ~np.concatenate(seen)
+        if not unseen.any():
+            return {
+                "status": "skipped",
+                "reason": "no_unseen_days",
+                "label_count": int(len(labels_df)),
+                "message": "โมเดลที่ใช้งานอยู่เคยเทรนกับค่าวัดจริงทุกวันที่มีแล้ว ไม่มีวันให้ตรวจ",
+            }
+        folds = day_folds(days, M_all, max_folds=_env_int("RETRAIN_CV_FOLDS", 7), test_on=unseen)
         if not folds:
             return {
                 "status": "skipped",
@@ -499,8 +517,9 @@ def execute_timeseries_retrain(
         fewest = min(len(fold["train_idx"]) for fold in folds)
         if fewest < min_train:
             return {"status": "skipped", "reason": "insufficient_training_data", "train_windows": int(fewest), "min_train_windows": min_train}
-        measured_days = sorted(day for fold in folds for day in fold["days"])
-        logger.info(f"ค่าวัดจริง {len(measured_days)} วัน (ใหม่ {len(new_days)}) แบ่ง {len(folds)} กลุ่ม, windows={len(X_all)}")
+        test_days = sorted(day for fold in folds for day in fold["days"])
+        measured_days = len(np.unique(days[M_all]))
+        logger.info(f"ค่าวัดจริง {measured_days} วัน: ตรวจ {len(test_days)} วันที่โมเดลยังไม่เคยเทรน แบ่ง {len(folds)} กลุ่ม, windows={len(X_all)}")
 
         def scale_x(X: np.ndarray) -> np.ndarray:
             n = len(X)
@@ -569,8 +588,9 @@ def execute_timeseries_retrain(
             "val_windows": int(len(X_all)),
             "label_count": int(len(labels_df)),
             "history": history,
-            "holdout_day": f"{measured_days[0]} – {measured_days[-1]}",
-            "measured_days": len(measured_days),
+            "holdout_day": f"{test_days[0]} – {test_days[-1]}",
+            "test_days": len(test_days),
+            "measured_days": measured_days,
             "new_days": len(new_days),
             "cv_folds": len(folds),
             "real_val_points": points,
@@ -609,8 +629,11 @@ def execute_timeseries_retrain(
                     "real_mae_before": summary.get("real_mae_before"),
                     "real_mae_after": summary.get("real_mae_after"),
                     "holdout_day": summary.get("holdout_day"),
+                    "test_days": summary.get("test_days"),
                     "measured_days": summary.get("measured_days"),
                     "cv_folds": summary.get("cv_folds"),
+                    # ทุกวันที่โมเดลนี้และโมเดลก่อนหน้าในสายเดียวกันเคยเทรน: รอบถัดไปไม่ใช้วันเหล่านี้ตรวจ
+                    "trained_days": sorted(trained | all_days),
                     "min_improvement": summary.get("min_improvement"),
                     "train_windows": summary["train_windows"],
                     "val_windows": summary["val_windows"],
@@ -671,7 +694,7 @@ def _log_mlflow(summary: dict[str, Any], deployed: bool, reason: Optional[str] =
             if "real_mae_before" in summary:
                 mlflow.log_metrics({"real_mae_before": summary["real_mae_before"], "real_mae_after": summary["real_mae_after"]})
                 mlflow.set_tag("holdout_day", summary["holdout_day"])
-            for name in ("min_improvement", "measured_days", "new_days", "cv_folds"):
+            for name in ("min_improvement", "test_days", "measured_days", "new_days", "cv_folds"):
                 if name in summary:
                     mlflow.log_param(name, summary[name])
             mlflow.set_tag("gate", summary["gate"])

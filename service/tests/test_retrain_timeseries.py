@@ -154,6 +154,18 @@ def test_every_measured_day_is_held_out_once_and_never_trained_on_in_its_own_fol
     assert [f["days"] for f in two] == [["2026-10-03", "2026-10-06"], ["2026-10-04"]]
     assert sum(int(f["test_mask"].sum()) for f in two) == int(M.sum())
 
+    # โมเดลที่ใช้งานอยู่เคยเทรนกับ 3 ต.ค. แล้ว: วันนั้นไม่ใช้ตรวจ แต่ยังใช้เทรนในทุกกลุ่ม
+    day3 = np.datetime64("2026-10-03")
+    unseen = M & (days != day3)
+    later = day_folds(days, M, test_on=unseen)
+    assert [f["days"] for f in later] == [["2026-10-04"], ["2026-10-06"]]
+    assert sum(int(f["test_mask"].sum()) for f in later) == int(unseen.sum())
+    for fold in later:
+        assert (days[fold["train_idx"]][M[fold["train_idx"]]] == day3).any()
+        assert not (days[fold["test_idx"]][fold["test_mask"]] == day3).any()
+    # เคยเทรนครบทุกวันแล้ว: ไม่มีวันให้ตรวจ
+    assert day_folds(days, M, test_on=np.zeros_like(M)) == []
+
     # มีค่าวัดจริงวันเดียว: ไม่มีวันให้เทรน จึงแบ่งไม่ได้
     _, _, M1, starts1 = make_live_windows(plain, _measured(plain, _day_stamps(3)), stride=1)
     assert day_folds(forecast_days(starts1), M1) == []

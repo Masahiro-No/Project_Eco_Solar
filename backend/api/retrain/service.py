@@ -143,6 +143,7 @@ def lstm_run(run: dict[str, Any], deployed: dict[str, Any]) -> dict[str, Any]:
             "val_mae_before": metrics.get("val_mae_before"),
             "val_mae_after": metrics.get("val_mae_after"),
             "holdout_day": tags.get("holdout_day"),
+            "test_days": params.get("test_days"),
             "measured_days": params.get("measured_days"),
             "cv_folds": params.get("cv_folds"),
             # set since the run feeds the model weather only, as in a live forecast; absent = the older check,
