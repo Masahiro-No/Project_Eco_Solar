@@ -1,6 +1,6 @@
 {
   "model_name": "Himawari Spatio-Temporal Seq2Seq ConvLSTM Cloud Nowcasting",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "created_at": "2026-10-01",
   "system": "Solar Forecast & Decision Support System (DSS)",
   "architecture": "Encoder-Decoder ConvLSTM (Seq2Seq)",
@@ -110,33 +110,33 @@
   "performance_benchmarks": {
     "file_size_mb": 2.7,
     "cpu_inference_latency_ms": 93.4,
-    "pytorch_onnx_max_deviation": 4.470348358154297e-07,
+    "pytorch_onnx_max_deviation": 9.238719940185547e-07,
     "validation_composite_loss": 0.147,
-    "validation_mse": 0.00806,
-    "validation_ssim": 0.6324
+    "validation_mse": 0.01008,
+    "validation_ssim": 0.6145
   },
-  "retrained_at": "2026-10-05 10:25:13 UTC",
+  "retrained_at": "2026-10-06 08:58:56 UTC",
   "retrain": {
-    "base_version": "1.0.1",
+    "base_version": "1.0.2",
     "data": "real Himawari Band 03 crops from the MinIO cache (daytime, 10-minute steps)",
     "frames_from": "2026-10-02T02:50:00+00:00",
-    "frames_to": "2026-10-04T10:40:00+00:00",
+    "frames_to": "2026-10-06T08:20:00+00:00",
     "train_sequences": 136,
-    "val_sequences": 39,
+    "val_sequences": 40,
     "best_epoch": 6,
     "baseline": {
-      "mse": 0.008770285174250603,
-      "mae": 0.06645306199789047,
-      "ssim": 0.5680102705955505,
-      "aoi_cloud_mae_pct": 19.85,
-      "aoi_frames": 654
+      "mse": 0.010380781255662441,
+      "mae": 0.07024863362312317,
+      "ssim": 0.5945615768432617,
+      "aoi_cloud_mae_pct": 24.05,
+      "aoi_frames": 672
     },
     "candidate": {
-      "mse": 0.008060635067522526,
-      "mae": 0.0641295537352562,
-      "ssim": 0.6323761343955994,
-      "aoi_cloud_mae_pct": 15.86,
-      "aoi_frames": 654
+      "mse": 0.010084116831421852,
+      "mae": 0.06831815838813782,
+      "ssim": 0.61446213722229,
+      "aoi_cloud_mae_pct": 21.47,
+      "aoi_frames": 672
     }
   }
 }
