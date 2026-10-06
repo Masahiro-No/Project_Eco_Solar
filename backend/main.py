@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 import os
 import threading
 
@@ -73,6 +74,9 @@ tags_metadata = [
 ]
 
 
+logger = logging.getLogger("solar.api")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Convenient for a new project; replace with Alembic migrations in production.
@@ -81,7 +85,7 @@ async def lifespan(_: FastAPI):
         await seed_default_stations()
     except Exception as e:
         # Fallback if DB not yet connected during local dev tools
-        print(f"[Seed Warning] Could not seed default station: {e}")
+        logger.warning(f"[Seed] Could not seed the default stations and accounts: {e}")
 
     # Gaps in weather and satellite data are healed by the ingestion worker in every 10-minute round.
     # The API does not run that catch-up itself: its downloads would block request handling after a restart.

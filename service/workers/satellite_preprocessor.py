@@ -212,6 +212,7 @@ def connect_minio(read_timeout: float = 1.5) -> Optional[object]:
 
     The short default timeout keeps a forecast from waiting on a slow cache; listing the whole cache needs more.
     """
+    last_error: Optional[Exception] = None
     try:
         import urllib3
         from minio import Minio
@@ -232,10 +233,12 @@ def connect_minio(read_timeout: float = 1.5) -> Optional[object]:
                 if not client.bucket_exists(CACHE_BUCKET):
                     client.make_bucket(CACHE_BUCKET)
                 return client
-            except Exception:
+            except Exception as e:
+                last_error = e
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        last_error = e
+    logger.warning(f"[Satellite Preprocessor] MinIO not reachable ({last_error}): frames come from NICT only and are not cached")
     return None
 
 
@@ -459,5 +462,5 @@ def _cache_latest_rgb(station_id: str, lat: float, lon: float, ts: datetime, min
             CACHE_BUCKET, f"{station_id}_latest.png", buf,
             length=buf.getbuffer().nbytes, content_type="image/png",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[Satellite Preprocessor] The preview image of '{station_id}' was not updated: {e}")

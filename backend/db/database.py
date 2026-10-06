@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -51,7 +52,9 @@ def _ensure_unique_rules(sync_conn) -> None:
             with sync_conn.begin_nested():
                 sync_conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {model.__tablename__} ({', '.join(key)})"))
         except DBAPIError as e:
-            print(f"[Schema Warning] unique rule {name} not added, rows that break it are stored: {str(e.orig)[:200]}")
+            logging.getLogger("solar.api").warning(
+                f"[Schema] unique rule {name} not added, rows that break it are stored: {str(e.orig)[:200]}"
+            )
 
 
 def _ensure_prediction_columns(sync_conn) -> None:
