@@ -5,7 +5,7 @@
 
 | Worker | container | คิว | ตั้งค่าใน `main.py` | ทำอะไร |
 |---|---|---|---|---|
-| Ingestion | `ingestion-worker` | `ingest_queue` | `IngestionWorkerSettings` | ทุก 10 นาที (นาทีที่ 8, 18, …, 58) ดึงสภาพอากาศและภาพดาวเทียมของทุกสถานี เติมช่องที่ขาด สั่งพยากรณ์ทีละสถานี และทุกนาทีเก็บผลพยากรณ์ที่เสร็จแล้วลงฐานข้อมูล |
+| Ingestion | `ingestion-worker` | `ingest_queue` | `IngestionWorkerSettings` | ทุก 10 นาที (นาทีที่ 8, 18, …, 58) และหนึ่งรอบทันทีเมื่อ worker เริ่ม ดึงสภาพอากาศและภาพดาวเทียมของทุกสถานี เติมช่องที่ขาด สั่งพยากรณ์ทีละสถานี และทุกนาทีเก็บผลพยากรณ์ที่เสร็จแล้วลงฐานข้อมูล |
 | Inference | `inference-worker` | `inference_queue` | `InferenceWorkerSettings` | รันโมเดลของหนึ่งสถานี: LSTM, ConvLSTM, รวมผล, ตัดสินใจ |
 | Trainer | `trainer-worker` | `train_queue` | `WorkerSettings` | retrain LSTM และ ConvLSTM และตรวจสูตรแสงจากภาพดาวเทียมกับค่าวัดจริง |
 
@@ -18,6 +18,7 @@ service/
 │   ├── ingestion_worker.py       รอบดึงข้อมูล, สั่งพยากรณ์, เก็บผล, นับภาพใหม่เพื่อเริ่ม retrain ConvLSTM
 │   ├── inference_worker.py       งานพยากรณ์หนึ่งสถานี
 │   ├── satellite_preprocessor.py โหลดภาพ Himawari จริง 12 เฟรม (cache ใน MinIO) ตัดภาพดำทิ้ง และเก็บภาพที่ ConvLSTM ทำนาย
+│   ├── round_lock.py             ให้รอบดึงข้อมูลรันทีละรอบ (รอบที่มาซ้อนถูกข้าม)
 │   ├── cloud_coverage.py         สัดส่วนเมฆและความสว่างใน AOI, ดัชนีฟ้าใสจากภาพ, ระดับผลกระทบ
 │   ├── ghi_blend.py              รวมผล LSTM กับภาพดาวเทียมด้วยน้ำหนัก w(t)
 │   ├── decision.py               เป้าตามแดด, ΔP, ระดับการเตือน, กำลังสำรอง, แถบความไม่แน่นอน
@@ -33,7 +34,7 @@ service/
 │   ├── calibrate_satellite_ghi.py  fit ค่า a, b ของดัชนีฟ้าใสจากภาพกับ GHI ที่วัดจริง (--write) หรือวัดความคลาดของสูตรเดิมรายสถานี (--check)
 │   └── backtest_cloud.py         ทดสอบย้อนหลังความแม่นของ % เมฆ
 ├── models/solar_lstm.py          โครงสร้าง LSTM (PyTorch) ที่ใช้ตอนเทรน; โครงสร้าง ConvLSTM อยู่ใน retrain_convlstm.py
-└── tests/                        ชุดทดสอบ 45 รายการ
+└── tests/                        ชุดทดสอบ 46 รายการ
 ```
 
 ## งานพยากรณ์หนึ่งรอบ (`run_inference`)

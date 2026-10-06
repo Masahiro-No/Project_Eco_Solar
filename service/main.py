@@ -71,7 +71,8 @@ if scheduled_ingest_pipeline is not None:
         cron_jobs = [
             # Himawari satellite imagery updates every 10 minutes (:08, :18, :28, :38, :48, :58);
             # the pipeline also enqueues the real-model inference for every station afterwards
-            cron(scheduled_ingest_pipeline, minute={8, 18, 28, 38, 48, 58}),
+            # Also once when the worker starts, so a restart does not wait up to 10 minutes for its first forecast.
+            cron(scheduled_ingest_pipeline, minute={8, 18, 28, 38, 48, 58}, run_at_startup=True),
             # Save finished inference results to the DB (every minute)
             cron(collect_inference_results, minute=set(range(60)), timeout=60),
         ]

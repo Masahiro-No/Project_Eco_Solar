@@ -5,6 +5,7 @@ import { HourglassIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useForecast } from '@/context/ForecastContext';
 import { alertUi, TONE_CLASS } from '@/lib/levels';
+import { useForecastAge } from './ForecastFreshness';
 
 const kw = (v: number) => Math.round(v).toLocaleString();
 
@@ -12,6 +13,27 @@ const kw = (v: number) => Math.round(v).toLocaleString();
 export function StatusHero() {
   const t = useTranslations('common');
   const { prediction, isLoading, selectedStation, stationsLoaded } = useForecast();
+  const { ageMin, stale, runLabel } = useForecastAge();
+
+  // An overdue forecast is not the state now (after a restart the newest one can be hours old)
+  if (prediction && stale) {
+    const then = alertUi(prediction.alert_level);
+    return (
+      <section role="status" aria-live="polite" className="flex shrink-0 items-center gap-5 rounded-xl border border-line bg-white px-5 py-4 shadow-sm">
+        <span className="flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-full bg-slate-100">
+          <HourglassIcon className="h-11 w-11 text-slate-400" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[12.5px] font-semibold text-slate-600">{selectedStation?.name ?? prediction.station_name}</p>
+          <p className="text-[20px] font-bold leading-tight text-ink">{t('stale_title')}</p>
+          <p className="mt-1 text-[14px] leading-snug text-slate-700">{t('stale_desc', { time: runLabel, minutes: ageMin ?? 0 })}</p>
+          <p className="mt-0.5 text-[12.5px] text-slate-600">
+            {t('stale_then', { status: then ? t(then.labelKey) : prediction.alert_level })}
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   if (!prediction) {
     const message = isLoading || !stationsLoaded ? t('loading') : selectedStation ? t('no_forecast_desc') : t('no_station');

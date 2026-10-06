@@ -5,6 +5,7 @@ import { BadgeCheckIcon, CloudIcon, CloudOffIcon, CircleHelpIcon } from 'lucide-
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
+import { useForecastAge } from './ForecastFreshness';
 import { useForecast } from '@/context/ForecastContext';
 import { solarApi } from '@/services/api';
 import { CLOUD_UI, LOSS_HIGH_FROM_PCT, LOSS_MEDIUM_FROM_PCT, TONE_CLASS, impactLevelOfLoss } from '@/lib/levels';
@@ -32,10 +33,13 @@ const STATUS_KEY: Record<string, StatusKey> = {
 /** Cloud in the area around the station: cover and expected loss of irradiance, now and for the next steps. */
 export function CloudPanel() {
   const t = useTranslations('common');
-  const { prediction, chartGhiData, selectedStationId } = useForecast();
+  const { prediction: newest, chartGhiData, selectedStationId } = useForecast();
+  const { stale } = useForecastAge();
   const [image, setImage] = useState<{ url: string; lastModified: string | null } | null>(null);
 
-  const predictedAt = prediction?.predicted_at;
+  const predictedAt = newest?.predicted_at;
+  // "cloud cover now" comes from the forecast round: an overdue round says nothing about now
+  const prediction = stale ? null : newest;
   useEffect(() => {
     if (!selectedStationId) return;
     let cancelled = false;
@@ -92,7 +96,7 @@ export function CloudPanel() {
           </div>
 
           <p className="mt-2 text-[12.5px] leading-snug text-slate-700">
-            {statusKey ? t(statusKey, { minutes: prediction?.satellite_lag_minutes ?? 0 }) : t('no_forecast_title')}
+            {statusKey ? t(statusKey, { minutes: prediction?.satellite_lag_minutes ?? 0 }) : stale ? t('stale_note') : t('no_forecast_title')}
           </p>
           {usable && prediction?.sat_calibration_verified != null && (
             <p
