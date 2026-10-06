@@ -28,7 +28,7 @@
       "mae": 0.1967,
       "mae_constant_mean": 0.3053,
       "measured_k_mean": 0.589,
-      "checked_at": "2026-10-05 13:43:26 UTC"
+      "checked_at": "2026-10-06 13:41:36 UTC"
     },
     "ST-003": {
       "fitted": false,
@@ -37,10 +37,10 @@
       "mae": 0.2017,
       "mae_constant_mean": 0.2242,
       "measured_k_mean": 0.751,
-      "checked_at": "2026-10-05 13:43:26 UTC"
+      "checked_at": "2026-10-06 13:41:36 UTC"
     }
   },
   "insufficient": {},
   "min_pairs": 30,
-  "checked_at": "2026-10-05 13:43:26 UTC"
+  "checked_at": "2026-10-06 13:41:36 UTC"
 }

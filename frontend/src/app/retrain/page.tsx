@@ -33,6 +33,8 @@ function Outcome({ run }: { run: RetrainRun }) {
 const fixed = (v: number | null | undefined, digits: number) => (v === null || v === undefined ? '—' : v.toFixed(digits));
 const beforeAfter = (a: unknown, b: unknown, digits: number) =>
   typeof a === 'number' && typeof b === 'number' ? `${a.toFixed(digits)} → ${b.toFixed(digits)}` : '—';
+/** Runs before 6 Oct 2026 evening checked the model with measured GHI in its input: their real_mae is not comparable. */
+const oldCheck = (r: RetrainRun) => r.metric === 'real_mae' && (r.details.min_improvement ?? null) === null;
 
 /** Proof that both models are retrained: deployed versions, what is pending and every run with its verdict. */
 export default function RetrainPage() {
@@ -75,6 +77,7 @@ export default function RetrainPage() {
     !reason ? '' : (KNOWN_REASONS as readonly string[]).includes(reason) ? t(`rt_reason_${reason as (typeof KNOWN_REASONS)[number]}`) : reason;
   const lstm = status?.lstm;
   const conv = status?.convlstm;
+  const daysPct = lstm?.new_days != null && lstm.days_needed ? Math.min(100, Math.round((lstm.new_days / lstm.days_needed) * 100)) : null;
   const batchPct = conv?.new_scans != null && conv.batch_size ? Math.min(100, Math.round((conv.new_scans / conv.batch_size) * 100)) : null;
   const count = (runs: RetrainRun[], outcome: string) => runs.filter((r) => r.outcome === outcome).length;
   const th = 'px-3 py-2';
@@ -128,9 +131,27 @@ export default function RetrainPage() {
             </div>
             <div>
               <p className="font-semibold text-ink">{t('rt_next')}</p>
-              <p className="mt-0.5 font-semibold text-ink">
-                {lstm?.running ? t('rt_state_running') : lstm?.scheduled ? t('rt_lstm_scheduled') : t('rt_lstm_idle')}
-              </p>
+              {lstm?.running ? (
+                <p className="mt-0.5 font-semibold text-ink">{t('rt_state_running')}</p>
+              ) : lstm?.new_days != null && lstm.days_needed ? (
+                <>
+                  <p className="mt-0.5 text-[20px] font-bold tabular-nums text-ink">
+                    {lstm.new_days} / {lstm.days_needed} <span className="text-[13px] font-semibold">{t('rt_days_unit')}</span>
+                  </p>
+                  <div
+                    className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-200"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={lstm.days_needed}
+                    aria-valuenow={Math.min(lstm.new_days, lstm.days_needed)}
+                  >
+                    <div className="h-full rounded-full bg-brand" style={{ width: `${daysPct}%` }} />
+                  </div>
+                </>
+              ) : (
+                <p className="mt-0.5 text-slate-600">{t('rt_lstm_idle')}</p>
+              )}
+              {lstm?.scheduled && !lstm.running && <p className="mt-1 text-[12px] font-semibold text-ink">{t('rt_lstm_scheduled')}</p>}
               <p className="mt-1 text-[12px] text-slate-600">
                 {t('rt_lstm_trigger')}{' '}
                 <Link href="/labeling" className="font-semibold text-brand underline">
@@ -221,10 +242,15 @@ export default function RetrainPage() {
                     <td className={td}>
                       <Outcome run={r} />
                     </td>
-                    <td className={`${td} text-right tabular-nums`}>{r.metric === 'real_mae' ? `${fixed(r.before, 1)} → ${fixed(r.after, 1)}` : '—'}</td>
+                    <td className={`${td} text-right tabular-nums`}>
+                      {r.metric === 'real_mae' ? `${fixed(r.before, 1)} → ${fixed(r.after, 1)}${oldCheck(r) ? ' *' : ''}` : '—'}
+                    </td>
                     <td className={`${td} text-right tabular-nums`}>{beforeAfter(r.details.val_mae_before, r.details.val_mae_after, 1)}</td>
                     <td className={`${td} text-right tabular-nums`}>{r.details.label_count ?? '—'}</td>
-                    <td className={`${td} whitespace-nowrap tabular-nums`}>{r.details.holdout_day ?? '—'}</td>
+                    <td className={`${td} whitespace-nowrap tabular-nums`}>
+                      {r.details.holdout_day ?? '—'}
+                      {(r.details.test_days ?? r.details.measured_days) ? ` (${r.details.test_days ?? r.details.measured_days} ${t('rt_days_unit')})` : ''}
+                    </td>
                     <td className={td}>{r.outcome === 'rejected' ? reasonText(r.reason) : r.gate === 'measured_ghi' ? t('rt_gate_measured') : t('rt_gate_weather')}</td>
                   </tr>
                 ))}
@@ -233,6 +259,7 @@ export default function RetrainPage() {
           </div>
         )}
         <p className="mt-2 text-[12px] leading-snug text-slate-600">{t('rt_lstm_cols_help')}</p>
+        {status?.history.lstm.some(oldCheck) && <p className="mt-1 text-[12px] leading-snug text-slate-600">{t('rt_lstm_old_check_note')}</p>}
       </Panel>
 
       {status && <LearningCurves model="convlstm" runs={status.history.convlstm} />}

@@ -3,7 +3,7 @@ import io
 import json
 import math
 import urllib.request
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -201,6 +201,138 @@ class IngestionService:
         )
 
     @staticmethod
+    def _history_rows(station, rows_10m, source: str) -> list[WeatherHistory]:
+        """Open-Meteo values on the 10-minute grid -> weather_history rows, with the sun position of every slot."""
+        lat, lon = station.latitude, station.longitude
+        records = []
+        for row_time, row in rows_10m.iterrows():
+            dt = row_time.to_pydatetime()
+            raw_ghi = max(0.0, float(row["shortwave_radiation"]))
+            solar = SolarCalculator.get_solar_metrics(lat=lat, lon=lon, dt_utc=dt, measured_ghi=raw_ghi)
+
+            if not solar.is_daylight or solar.zenith_degrees >= 90.0:
+                ghi = 0.0
+                dni = 0.0
+                dhi = 0.0
+            else:
+                ghi = raw_ghi
+                dni = max(0.0, float(row["direct_normal_irradiance"]))
+                dhi = max(0.0, float(row["diffuse_radiation"]))
+
+            records.append(WeatherHistory(
+                station_id=station.id,
+                timestamp=dt,
+                ghi=round(ghi, 2),
+                dni=round(dni, 2),
+                dhi=round(dhi, 2),
+                clearsky_ghi=round(solar.clearsky_ghi, 2),
+                clearsky_index=round(solar.clearsky_index, 4),
+                solar_zenith_angle=round(solar.zenith_degrees, 2),
+                temperature=round(float(row["temperature_2m"]), 2),
+                relative_humidity=round(float(row["relative_humidity_2m"]), 2),
+                wind_speed=round(float(row["wind_speed_10m"]), 2),
+                cloud_cover=round(float(row["cloud_cover"]), 2),
+                surface_pressure=round(float(row["surface_pressure"]), 2),
+                source=source,
+            ))
+        return records
+
+    @staticmethod
+    async def backfill_weather_for_days(db: AsyncSession, station_id: str, days: list[date]) -> dict:
+        """Fetch the weather of past days that have measured GHI but no weather in the system.
+
+        `days` are Thailand-time days. A forecast for the morning looks back 6 hours, so the day before each of
+        them is covered too. Only slots that have no row yet are stored, and only slots older than the station's
+        newest weather row: the live rounds and the catch-up never write there, so no slot is stored twice.
+        Open-Meteo is asked through the same endpoint and variables as the catch-up; it keeps about three months.
+
+        Returns {"rows_added": n, "status": ..., "message": text or None} with status
+          added           rows were stored
+          not_needed      no slot of these days is missing (or the days are newer than the newest weather row)
+          no_weather_yet  the station has no weather at all (its first ingestion round fetches the last 2 days)
+          no_data         Open-Meteo has no values for the missing slots
+          failed          the request failed; message says why
+        """
+        import pandas as pd
+
+        result = {"rows_added": 0, "status": "not_needed", "message": None}
+        if not days:
+            return result
+        try:
+            station = await StationService.get_station_by_id(db, station_id)
+        except Exception:  # noqa: BLE001
+            return {**result, "status": "failed", "message": f"Station '{station_id}' not found."}
+
+        newest = (await db.execute(select(func.max(WeatherHistory.timestamp)).where(WeatherHistory.station_id == station_id))).scalar_one_or_none()
+        if newest is None:
+            return {**result, "status": "no_weather_yet"}
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=timezone.utc)
+
+        step = timedelta(minutes=10)
+        needed = sorted({d - timedelta(days=1) for d in days} | set(days))   # as UTC dates
+        start = datetime.combine(needed[0], datetime.min.time(), tzinfo=timezone.utc)
+        end = min(datetime.combine(needed[-1], datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1), newest)
+        if end <= start:
+            return result
+
+        stored_times = (await db.execute(
+            select(WeatherHistory.timestamp).where(
+                WeatherHistory.station_id == station_id,
+                WeatherHistory.timestamp >= start - step,
+                WeatherHistory.timestamp < end + step,
+            )
+        )).scalars().all()
+
+        def slot_of(ts: datetime) -> datetime:
+            """the 10-minute slot a stored row counts for (nearest, as the model input and the training frame do)"""
+            ts = (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)) + timedelta(minutes=5)
+            return ts.replace(minute=(ts.minute // 10) * 10, second=0, microsecond=0)
+
+        have = {slot_of(ts) for ts in stored_times}
+        wanted_days = set(needed)
+        missing, slot = [], start
+        while slot < end:
+            if slot.date() in wanted_days and slot not in have:
+                missing.append(slot)
+            slot += step
+        if not missing:
+            return result
+
+        # one day more than needed: the last slots of a day lie between its 23:45 value and the next day's 00:00
+        last_date = min(needed[-1] + timedelta(days=1), datetime.now(timezone.utc).date())
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={station.latitude}&longitude={station.longitude}"
+            f"&start_date={needed[0].isoformat()}&end_date={last_date.isoformat()}"
+            f"&minutely_15={','.join(OPEN_METEO_VARIABLES)}"
+            f"&timezone=UTC&{OPEN_METEO_WIND_UNIT}"
+        )
+        try:
+            data = await asyncio.to_thread(fetch_json, url, 30)
+            minutely = data.get("minutely_15") or {}
+            rows = WeatherDataNormalizer.open_meteo_ten_minute_rows(minutely) if "time" in minutely else None
+        except Exception as e:  # noqa: BLE001  the measured values are saved either way; the caller reports this
+            reason = str(e)
+            try:
+                reason = json.loads(e.read().decode()).get("reason", reason)   # Open-Meteo explains a 400 in the body
+            except Exception:  # noqa: BLE001
+                pass
+            return {**result, "status": "failed", "message": reason}
+
+        if rows is not None:
+            rows = rows[rows.index.isin(pd.DatetimeIndex(missing))]
+        if rows is None or rows.empty:
+            return {**result, "status": "no_data"}
+
+        records = IngestionService._history_rows(station, rows, "open_meteo_backfill")
+        stored = 0
+        for i in range(0, len(records), 1000):   # a statement holds a limited number of values
+            stored += (await db.execute(insert_once(db, records[i:i + 1000]))).rowcount
+        await db.commit()
+        return {**result, "rows_added": stored, "status": "added" if stored else "not_needed"}
+
+    @staticmethod
     async def auto_catchup_weather(
         db: AsyncSession, station_id: str, max_gap_days: int = 7
     ) -> dict:
@@ -297,38 +429,7 @@ class IngestionService:
                 "records_skipped": skipped,
             }
 
-        records = []
-        for row_time, row in df_missing.iterrows():
-            dt = row_time.to_pydatetime()
-            raw_ghi = max(0.0, float(row["shortwave_radiation"]))
-            solar = SolarCalculator.get_solar_metrics(lat=lat, lon=lon, dt_utc=dt, measured_ghi=raw_ghi)
-
-            if not solar.is_daylight or solar.zenith_degrees >= 90.0:
-                ghi = 0.0
-                dni = 0.0
-                dhi = 0.0
-            else:
-                ghi = raw_ghi
-                dni = max(0.0, float(row["direct_normal_irradiance"]))
-                dhi = max(0.0, float(row["diffuse_radiation"]))
-
-            record = WeatherHistory(
-                station_id=station.id,
-                timestamp=dt,
-                ghi=round(ghi, 2),
-                dni=round(dni, 2),
-                dhi=round(dhi, 2),
-                clearsky_ghi=round(solar.clearsky_ghi, 2),
-                clearsky_index=round(solar.clearsky_index, 4),
-                solar_zenith_angle=round(solar.zenith_degrees, 2),
-                temperature=round(float(row["temperature_2m"]), 2),
-                relative_humidity=round(float(row["relative_humidity_2m"]), 2),
-                wind_speed=round(float(row["wind_speed_10m"]), 2),
-                cloud_cover=round(float(row["cloud_cover"]), 2),
-                surface_pressure=round(float(row["surface_pressure"]), 2),
-                source="open_meteo_catchup",
-            )
-            records.append(record)
+        records = IngestionService._history_rows(station, df_missing, "open_meteo_catchup")
 
         stored = (await db.execute(insert_once(db, records))).rowcount
         await db.commit()

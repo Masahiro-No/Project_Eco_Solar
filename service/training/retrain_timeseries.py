@@ -1,14 +1,20 @@
-"""Solar Time-Series LSTM retraining (ข้อมูลจริง + ground truth, ตรวจสอบก่อน deploy).
+"""Solar Time-Series LSTM retraining (เรียนจากค่าที่วัดจริง ในเงื่อนไขเดียวกับตอนใช้งาน, ตรวจสอบก่อน deploy).
 
 ลำดับงาน:
   1. ตรวจ ENABLE_RETRAIN + ล็อกกันรันซ้อน (Redis) + ล้างคิว debounce
   2. ดึงโมเดลที่ใช้งานอยู่ (ONNX + scalers + meta) จาก MinIO (สำรอง: model/time-series/) — ONNX คือแหล่งความจริงเดียว ไม่ต้องมี .pth
-  3. อ่าน weather_history จาก PostgreSQL + label ทั้งหมดจาก Label Studio -> สร้างฟีเจอร์ 16 ตัว/window (ground truth ทับค่า GHI)
-  4. โหลดน้ำหนัก ONNX เข้า PyTorch -> fine-tune (แบ่ง validation ตามวัน ไม่ให้ target รั่ว)
-  5. deploy เมื่อ MAE บน validation ไม่แย่กว่าโมเดลเดิมเกินเกณฑ์ -> export ONNX, ตรวจเทียบ onnxruntime,
-     สำรองของเดิม (เก็บ 3 เวอร์ชัน), เขียนไฟล์ local, อัปโหลด MinIO (meta ขึ้นทีหลังสุด)
+  3. อ่าน weather_history จาก PostgreSQL + label ทั้งหมดจาก Label Studio -> window ที่ข้อมูลป้อนมาจากสภาพอากาศอย่างเดียว
+     (แบบที่โมเดลได้รับตอนพยากรณ์จริง) และเป้าหมายคือ GHI ที่วัดจริงของช่วงพยากรณ์
+  4. นับวันที่มีค่าวัดจริงที่รอบก่อนยังไม่เคยใช้: ยังไม่ครบ RETRAIN_MIN_NEW_DAYS -> บันทึกจำนวนไว้ให้หน้าเว็บแล้วจบรอบ
+  5. cross-validation ตามวัน บนวันที่โมเดลที่ใช้งานอยู่ยังไม่เคยเทรน (model_meta.json: retrain.trained_days):
+     กันวันเหล่านั้นไว้ตรวจทีละกลุ่มจนครบ แต่ละกลุ่มเริ่มจากโมเดลที่ใช้งานอยู่ แล้ว fine-tune จากวันที่เหลือทั้งหมด
+     รวมวันที่เคยเทรนแล้ว (loss เฉพาะช่องที่มีค่าวัดจริง) ได้ MAE รวมทุกวันที่ตรวจของแต่ละ epoch
+     วันที่โมเดลเคยเทรนแล้วไม่ใช้ตรวจ: โมเดลเดิมจะดูดีกว่าความจริงบนวันที่เคยเห็นคำตอบ
+  6. deploy เมื่อ MAE รวมที่ epoch ที่ดีที่สุดลดลงอย่างน้อย RETRAIN_MIN_IMPROVEMENT -> เทรนจากทุกวันด้วยจำนวน epoch นั้น,
+     export ONNX, ตรวจเทียบ onnxruntime, สำรองของเดิม (เก็บ 3 เวอร์ชัน), เขียนไฟล์ local, อัปโหลด MinIO (meta ขึ้นทีหลังสุด)
+     และจดวันที่โมเดลใหม่เทรนไปแล้วลง retrain.trained_days
 
-หมายเหตุ: ทุกครั้งที่รัน label "ทั้งหมด" ในช่วงข้อมูลจะถูกนำไปทับ GHI (ไม่ใช่เฉพาะ label ใหม่) เพื่อให้โมเดลเห็นข้อมูลเดิมด้วย.
+หมายเหตุ: ทุกครั้งที่รัน label "ทั้งหมด" ในช่วงข้อมูลจะถูกนำมาใช้ (ไม่ใช่เฉพาะ label ใหม่) และเริ่มจากโมเดลที่ใช้งานอยู่เสมอ.
 """
 
 from __future__ import annotations
@@ -37,6 +43,8 @@ MINIO_PREFIX = "solar_lstm"
 MODEL_FILES = ["solar_ghi_lstm.onnx", "feature_scaler.joblib", "target_scaler.joblib", "model_meta.json"]
 LOCK_KEY = "retrain:timeseries:lock"
 SCHEDULED_KEY = "retrain:timeseries:scheduled"  # backend ตั้งไว้ตอน debounce; trainer ลบตอนเริ่มรัน
+STATUS_KEY = "retrain:timeseries:status"        # JSON: จำนวนวันใหม่ที่นับได้ครั้งล่าสุด (หน้าสถานะ retrain อ่าน)
+USED_DAYS_KEY = "retrain:timeseries:used_days"  # JSON list ของ 'สถานี|YYYY-MM-DD' ที่รอบ retrain ล่าสุดใช้ไปแล้ว
 LS_PROJECT_TITLE = "Solar GHI Ground Truth Verification"
 LOCK_TTL_SECONDS = 3600
 KEEP_BACKUPS = 3
@@ -200,7 +208,12 @@ def fetch_labels_from_label_studio(lookback_days: int):
 
 # ----------------------------------------------------------------------------- data
 def load_training_frames(engine, lookback_days: int, labels_df):
-    """อ่าน weather_history จาก Postgres + ใช้ label จาก Label Studio -> {station_id: feature frame}."""
+    """อ่าน weather_history จาก Postgres และ label จาก Label Studio -> {station_id: {"inputs", "measured"}}
+
+    inputs    ตารางฟีเจอร์จากสภาพอากาศอย่างเดียว แบบเดียวกับที่โมเดลได้รับตอนพยากรณ์จริง
+    measured  Series ของ GHI ที่วัดจริงบนช่องเวลาเดียวกัน (NaN = ไม่มีค่าวัด) หรือ None เมื่อสถานีไม่มี label
+    ค่าที่วัดจริงไม่ถูกเขียนลงในข้อมูลป้อน: ตอนใช้งานจริงค่านั้นยังมาไม่ถึง
+    """
     import pandas as pd
     from sqlalchemy import text
 
@@ -218,14 +231,31 @@ def load_training_frames(engine, lookback_days: int, labels_df):
     )
     frames = {}
     for station_id, wdf in weather.groupby("station_id"):
+        wdf = wdf.drop(columns=["station_id"])
         lab_df = labels_df[labels_df["station_id"] == station_id]
-        lab_series = (
-            pd.Series(lab_df["ghi_actual"].values, index=pd.to_datetime(lab_df["timestamp"], utc=True))
-            if len(lab_df)
-            else None
-        )
-        frames[station_id] = build_station_frame(wdf.drop(columns=["station_id"]), labels=lab_series)
+        measured = None
+        if len(lab_df):
+            lab_series = pd.Series(lab_df["ghi_actual"].values, index=pd.to_datetime(lab_df["timestamp"], utc=True))
+            with_labels = build_station_frame(wdf, labels=lab_series)   # ใช้กติกาคัด label ของ build_station_frame
+            measured = with_labels["GHI"].where(with_labels["is_label"])
+        frames[station_id] = {"inputs": build_station_frame(wdf), "measured": measured}
     return frames
+
+
+def days_with_new_values(current: set[str], used: set[str]) -> list[str]:
+    """วันที่มีค่าวัดจริงซึ่งรอบ retrain ก่อนหน้ายังไม่เคยใช้ (สมาชิก = 'สถานี|YYYY-MM-DD')
+
+    หลายสถานีในวันเดียวกันนับเป็นวันเดียว; ค่าของสถานีใหม่ในวันที่เคยใช้แล้วก็นับวันนั้นเป็นวันใหม่
+    """
+    return sorted({key.split("|", 1)[1] for key in current - used})
+
+
+def accepts(mae_before: float, mae_after: float, min_improvement: float) -> bool:
+    """รับโมเดลใหม่เมื่อ MAE เทียบค่าที่วัดจริงของวันที่กันไว้ตรวจลดลงอย่างน้อย min_improvement (สัดส่วนของค่าเดิม)
+
+    ผลต่างที่เล็กกว่านั้นอยู่ในระดับความแกว่งของการเทรนแต่ละครั้ง ไม่นับว่าดีขึ้น
+    """
+    return mae_after <= mae_before * (1.0 - min_improvement)
 
 
 # ----------------------------------------------------------------------------- model math
@@ -254,8 +284,8 @@ def fine_tune(
     model,
     X_tr: np.ndarray,
     Y_tr_scaled: np.ndarray,
-    X_va: np.ndarray,
-    Y_va_raw: np.ndarray,
+    X_va: Optional[np.ndarray],
+    Y_va_raw: Optional[np.ndarray],
     target_scaler,
     device,
     epochs: int,
@@ -264,8 +294,13 @@ def fine_tune(
     patience: int = 3,
     seed: int = 42,
     val_mask: Optional[np.ndarray] = None,
+    train_mask: Optional[np.ndarray] = None,
 ) -> dict[str, Any]:
-    """fine-tune แบบ warm-start; เก็บสถานะที่ val MAE ต่ำสุด (epoch 0 = โมเดลเดิม). คืนสรุปผล และโหลด best state ใส่ model."""
+    """fine-tune แบบ warm-start; เก็บสถานะที่ val MAE ต่ำสุด (epoch 0 = โมเดลเดิม). คืนสรุปผล และโหลด best state ใส่ model.
+
+    train_mask (n, horizon) bool: คิด loss เฉพาะช่องที่เป็น True (ช่องที่มีค่าวัดจริง); None = ทุกช่อง
+    X_va = None: ไม่มีชุดตรวจ จึงเทรนครบทุก epoch แล้วใช้สถานะสุดท้าย (ใช้เทรนโมเดลที่จะนำไปใช้ หลัง cross-validation เลือกจำนวน epoch แล้ว)
+    """
     import copy
 
     import torch
@@ -273,31 +308,39 @@ def fine_tune(
     from torch.utils.data import DataLoader, TensorDataset
 
     torch.manual_seed(seed)
+    weights = np.ones(Y_tr_scaled.shape, np.float32) if train_mask is None else train_mask.astype(np.float32)
     loader = DataLoader(
-        TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(Y_tr_scaled)),
+        TensorDataset(torch.from_numpy(X_tr), torch.from_numpy(Y_tr_scaled), torch.from_numpy(weights)),
         batch_size=batch_size,
         shuffle=True,
     )
-    criterion = nn.HuberLoss()
+    criterion = nn.HuberLoss(reduction="none")
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
-    baseline_mae = evaluate_mae(model, X_va, Y_va_raw, target_scaler, device, mask=val_mask)
+    select = X_va is not None
+    baseline_mae = evaluate_mae(model, X_va, Y_va_raw, target_scaler, device, mask=val_mask) if select else float("nan")
     best_mae, best_epoch = baseline_mae, 0
     best_state = copy.deepcopy(model.state_dict())
-    history = [{"epoch": 0, "val_mae": round(baseline_mae, 3)}]  # epoch 0 = the deployed model, before any update
+    # epoch 0 = the deployed model, before any update
+    history = [{"epoch": 0, "val_mae": round(baseline_mae, 3)}] if select else [{"epoch": 0}]
     bad = 0
     for epoch in range(1, epochs + 1):
         model.train()
         total, count = 0.0, 0
-        for xb, yb in loader:
-            xb, yb = xb.to(device), yb.to(device)
+        for xb, yb, wb in loader:
+            xb, yb, wb = xb.to(device), yb.to(device), wb.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
+            loss = (criterion(model(xb), yb) * wb).sum() / wb.sum().clamp(min=1.0)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             total += float(loss.item()) * len(xb)
             count += len(xb)
+        if not select:
+            history.append({"epoch": epoch, "train_loss": round(total / max(count, 1), 6), "lr": optimizer.param_groups[0]["lr"]})
+            logger.info(f"epoch {epoch}/{epochs} train_loss={total / max(count, 1):.6f}")
+            best_epoch, best_state = epoch, copy.deepcopy(model.state_dict())
+            continue
         val_mae = evaluate_mae(model, X_va, Y_va_raw, target_scaler, device, mask=val_mask)
         history.append({
             "epoch": epoch, "train_loss": round(total / max(count, 1), 6), "val_mae": round(val_mae, 3),
@@ -401,111 +444,166 @@ def execute_timeseries_retrain(
         lookback = int(meta["lookback_steps"])  # ความยาว input ของโมเดลที่ใช้งานอยู่ (ไม่กำหนดตายตัวในโค้ด)
         logger.info(f"โมเดลปัจจุบัน v{meta.get('version')} trained_at={meta.get('trained_at')} (จาก {source})")
 
-        # 4. ข้อมูลจริง -> window
-        from service.training.features import label_holdout, make_windows, split_by_day
+        # 4. window แบบเดียวกับตอนใช้งาน: ข้อมูลป้อนจากสภาพอากาศอย่างเดียว เป้าหมายคือค่าที่วัดจริง
+        from service.training.features import day_folds, forecast_days, make_live_windows, make_windows, measured_slots_per_day
 
         frames = load_training_frames(engine, lookback_days, labels_df)
-        stride = _env_int("RETRAIN_WINDOW_STRIDE", 2)
-        Xs, Ys, starts, has_label, masks = [], [], [], [], []
+        min_slots = _env_int("RETRAIN_MIN_DAY_SLOTS", 6)   # วันที่มีค่าวัดจริงน้อยกว่านี้ (1 ชั่วโมง) ยังไม่นับเป็นวันใหม่
+        trained = set((meta.get("retrain") or {}).get("trained_days") or [])   # 'สถานี|วัน' ที่โมเดลที่ใช้งานอยู่เคยเทรนแล้ว
+        Xs, Ys, Ms, starts, seen, station_days, all_days = [], [], [], [], [], set(), set()
         for station_id, frame in frames.items():
-            X, Y, st, hl, mk = make_windows(frame, lookback=lookback, stride=stride, return_label_mask=True)
-            logger.info(f"  {station_id}: {len(frame)} ช่องเวลา -> {len(X)} windows")
+            if frame["measured"] is None:
+                continue
+            X, Y, M, st = make_live_windows(frame["inputs"], frame["measured"], lookback=lookback)
+            logger.info(f"  {station_id}: {len(frame['inputs'])} ช่องเวลา -> {len(X)} windows ที่มีค่าวัดจริง")
             if len(X):
-                Xs.append(X), Ys.append(Y), starts.append(st), has_label.append(hl), masks.append(mk)
+                Xs.append(X), Ys.append(Y), Ms.append(M), starts.append(st)
+                slots = measured_slots_per_day(st, M, lookback)
+                station_days |= {f"{station_id}|{day}" for day, n in slots.items() if n >= min_slots}
+                all_days |= {f"{station_id}|{day}" for day in slots}
+                seen_days = np.array([day for day in slots if f"{station_id}|{day}" in trained], dtype="datetime64[D]")
+                seen.append(np.isin(forecast_days(st, lookback), seen_days))
         if not Xs:
-            return {"status": "skipped", "reason": "no_complete_windows", "message": f"weather_history ไม่พอสำหรับ window {(lookback + FORECAST_STEPS) / 6:g} ชม."}
-        X_all, Y_all = np.concatenate(Xs), np.concatenate(Ys)
-        starts_all, has_label_all = np.concatenate(starts), np.concatenate(has_label)
-        mask_all = np.concatenate(masks)
+            return {"status": "skipped", "reason": "no_complete_windows", "message": f"weather_history ไม่พอสำหรับ window {(lookback + FORECAST_STEPS) / 6:g} ชม. ที่มีค่าวัดจริง"}
 
-        train_idx, val_idx = split_by_day(starts_all, has_label_all, lookback=lookback)
-        # ค่าที่วัดจริงของวันล่าสุดที่มี label ถูกกันไว้ตรวจ: window ที่แตะวันนั้นไม่ถูกใช้เทรน
-        holdout = label_holdout(starts_all, mask_all, lookback=lookback, min_points=_env_int("RETRAIN_MIN_REAL_VAL_POINTS", 20))
-        if holdout is not None:
-            train_idx = train_idx[~holdout["touches"][train_idx]]
-            val_idx = val_idx[~holdout["touches"][val_idx]]
-            logger.info(f"กันค่าจริงของวันที่ {holdout['day']} ไว้ตรวจ: {int(holdout['val_mask'].sum())} จุด ใน {len(holdout['val_idx'])} windows")
-        min_val = _env_int("RETRAIN_MIN_VAL_WINDOWS", 50)
-        if len(val_idx) < min_val or len(train_idx) == 0:
+        # สะสมค่าวัดจริงของวันใหม่ให้ครบก่อน: รอบที่ได้ข้อมูลเพิ่มวันเดียวให้ผลตามสภาพอากาศของวันนั้น ไม่ใช่ตามโมเดล
+        days_needed = _env_int("RETRAIN_MIN_NEW_DAYS", 7)
+        used = lock.get(USED_DAYS_KEY)   # ไม่มีบันทึก (เช่น Redis ถูกล้าง): ถือว่าใช้ไปแล้วเท่าที่โมเดลเคยเทรน
+        new_days = days_with_new_values(station_days, set(json.loads(used)) if used else trained)
+
+        def save_counter(count: int) -> None:
+            lock.set(STATUS_KEY, json.dumps({
+                "new_days": count,
+                "days_needed": days_needed,
+                "measured_days": len({key.split("|", 1)[1] for key in station_days}),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }))
+
+        def mark_days_used() -> None:
+            lock.set(USED_DAYS_KEY, json.dumps(sorted(station_days)))
+            save_counter(0)
+
+        save_counter(len(new_days))
+        if len(new_days) < days_needed:
+            logger.info(f"ค่าวัดจริงของวันใหม่ {len(new_days)}/{days_needed} วัน — ยังไม่ retrain")
             return {
                 "status": "skipped",
-                "reason": "insufficient_validation_data",
-                "train_windows": int(len(train_idx)),
-                "val_windows": int(len(val_idx)),
-                "min_val_windows": min_val,
+                "reason": "waiting_for_more_days",
+                "new_days": len(new_days),
+                "days_needed": days_needed,
+                "message": f"มีค่าวัดจริงของวันใหม่ {len(new_days)} วัน จะ retrain เมื่อครบ {days_needed} วัน",
             }
+
+        # 5. cross-validation ตามวัน: ตรวจเฉพาะวันที่โมเดลที่ใช้งานอยู่ยังไม่เคยเทรน โมเดลที่ถูกวัดก็ไม่เคยเห็นวันนั้น
+        X_all, Y_all, M_all, starts_all = np.concatenate(Xs), np.concatenate(Ys), np.concatenate(Ms), np.concatenate(starts)
+        days = forecast_days(starts_all, lookback)
+        unseen = M_all & ~np.concatenate(seen)
+        if not unseen.any():
+            return {
+                "status": "skipped",
+                "reason": "no_unseen_days",
+                "label_count": int(len(labels_df)),
+                "message": "โมเดลที่ใช้งานอยู่เคยเทรนกับค่าวัดจริงทุกวันที่มีแล้ว ไม่มีวันให้ตรวจ",
+            }
+        folds = day_folds(days, M_all, max_folds=_env_int("RETRAIN_CV_FOLDS", 7), test_on=unseen)
+        if not folds:
+            return {
+                "status": "skipped",
+                "reason": "needs_two_days_of_measured_ghi",
+                "label_count": int(len(labels_df)),
+                "message": "ต้องมีค่าวัดจริงอย่างน้อย 2 วัน: กันไว้ตรวจหนึ่งวัน ใช้เทรนหนึ่งวัน",
+            }
+        min_train = _env_int("RETRAIN_MIN_TRAIN_WINDOWS", 50)
+        fewest = min(len(fold["train_idx"]) for fold in folds)
+        if fewest < min_train:
+            return {"status": "skipped", "reason": "insufficient_training_data", "train_windows": int(fewest), "min_train_windows": min_train}
+        test_days = sorted(day for fold in folds for day in fold["days"])
+        measured_days = len(np.unique(days[M_all]))
+        logger.info(f"ค่าวัดจริง {measured_days} วัน: ตรวจ {len(test_days)} วันที่โมเดลยังไม่เคยเทรน แบ่ง {len(folds)} กลุ่ม, windows={len(X_all)}")
 
         def scale_x(X: np.ndarray) -> np.ndarray:
             n = len(X)
             return feature_scaler.transform(X.reshape(-1, X.shape[-1])).reshape(n, lookback, -1).astype(np.float32)
 
-        X_va, Y_va_raw = scale_x(X_all[val_idx]), Y_all[val_idx]
-        oversample = max(1, _env_int("RETRAIN_LABEL_OVERSAMPLE", 5))
-        repeat = np.where(has_label_all[train_idx], oversample, 1)
-        train_rep = np.repeat(train_idx, repeat)
-        X_tr = scale_x(X_all[train_rep])
-        Y_tr = target_scaler.transform(Y_all[train_rep].reshape(-1, 1)).reshape(len(train_rep), FORECAST_STEPS).astype(np.float32)
-        logger.info(f"train windows={len(train_idx)} (+label oversample => {len(train_rep)}), val windows={len(val_idx)}")
+        X_scaled = scale_x(X_all)
+        Y_scaled = target_scaler.transform(Y_all.reshape(-1, 1)).reshape(Y_all.shape).astype(np.float32)
 
-        # 5. โหลดน้ำหนัก ONNX -> PyTorch -> fine-tune
+        # window ที่เป้าหมายเป็นค่าของ Open-Meteo (ทุกสถานี): ไม่ใช้ตัดสิน บันทึกไว้ให้เห็นว่าโมเดลขยับจากแหล่งข้อมูลป้อนไปเท่าไร
+        Xp, Yp = [], []
+        for frame in frames.values():
+            X, Y, _, _ = make_windows(frame["inputs"], lookback=lookback, stride=_env_int("RETRAIN_WINDOW_STRIDE", 2))
+            if len(X):
+                Xp.append(X), Yp.append(Y)
+        X_plain, Y_plain = scale_x(np.concatenate(Xp)), np.concatenate(Yp)
+
         import torch
 
         from service.models.solar_lstm import SolarLSTMForecaster
         from service.training.onnx_weights import load_onnx_into_model
 
         dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        model = SolarLSTMForecaster(
-            input_dim=len(ALIGNED_FEATURE_COLS), hidden_dim=128, num_layers=2, forecast_steps=FORECAST_STEPS
-        )
-        load_onnx_into_model(model, str(model_dir / "solar_ghi_lstm.onnx"))
-        model.to(dev)
-        plain_before = evaluate_mae(model, X_va, Y_va_raw, target_scaler, dev)
-        if holdout is not None:
-            # เกณฑ์หลัก = ค่าที่วัดจริงที่กันไว้: เลือก epoch และตัดสินจาก MAE บนจุดเหล่านั้น
-            X_real, Y_real, real_mask = scale_x(X_all[holdout["val_idx"]]), Y_all[holdout["val_idx"]], holdout["val_mask"]
-            result = fine_tune(
-                model, X_tr, Y_tr, X_real, Y_real, target_scaler, dev,
-                epochs=int(payload.get("epochs", epochs)),
-                lr=float(payload.get("learning_rate", learning_rate)),
-                val_mask=real_mask,
-            )
-            plain_after = evaluate_mae(model, X_va, Y_va_raw, target_scaler, dev)
-        else:
-            result = fine_tune(
-                model, X_tr, Y_tr, X_va, Y_va_raw, target_scaler, dev,
-                epochs=int(payload.get("epochs", epochs)),
-                lr=float(payload.get("learning_rate", learning_rate)),
-            )
-            plain_after = result["best_val_mae"]
 
-        summary = {
-            "gate": "measured_ghi" if holdout is not None else "weather_only",
-            "val_mae_before": round(plain_before, 3),
-            "val_mae_after": round(plain_after, 3),
-            "best_epoch": result["best_epoch"],
-            "train_windows": int(len(train_idx)),
-            "val_windows": int(len(val_idx)),
-            "label_count": int(len(labels_df)),
-            "history": result["history"],
-        }
-        if holdout is not None:
-            summary.update(
-                holdout_day=holdout["day"],
-                real_val_points=int(real_mask.sum()),
-                real_mae_before=round(result["baseline_val_mae"], 3),
-                real_mae_after=round(result["best_val_mae"], 3),
+        def deployed_model():
+            m = SolarLSTMForecaster(input_dim=len(ALIGNED_FEATURE_COLS), hidden_dim=128, num_layers=2, forecast_steps=FORECAST_STEPS)
+            load_onnx_into_model(m, str(model_dir / "solar_ghi_lstm.onnx"))
+            return m.to(dev)
+
+        n_epochs = int(payload.get("epochs", epochs))
+        lr = float(payload.get("learning_rate", learning_rate))
+        mae_sum, loss_sum, points = np.zeros(n_epochs + 1), np.zeros(n_epochs + 1), 0
+        for i, fold in enumerate(folds, 1):
+            tr, te = fold["train_idx"], fold["test_idx"]
+            run = fine_tune(
+                deployed_model(), X_scaled[tr], Y_scaled[tr], X_scaled[te], Y_all[te], target_scaler, dev,
+                epochs=n_epochs, lr=lr, patience=n_epochs + 1,   # ไม่หยุดก่อน: ต้องได้ค่าของทุก epoch จากทุกกลุ่ม
+                val_mask=fold["test_mask"], train_mask=M_all[tr],
             )
-            # ต้องแม่นขึ้นเทียบกับค่าที่วัดจริง และไม่แย่ลงเกิน tolerance บนช่วงที่ไม่มีค่าจริง
-            tolerance = _env_float("RETRAIN_PLAIN_TOLERANCE", 0.05)
-            improved = result["best_epoch"] > 0 and result["best_val_mae"] < result["baseline_val_mae"]
-            kept = plain_after <= plain_before * (1.0 + tolerance)
-            reason = None if (improved and kept) else ("no_improvement_on_measured_ghi" if not improved else "worse_on_weather_only_validation")
-        else:
-            ratio = _env_float("RETRAIN_MAX_REGRESSION_RATIO", 1.0)
-            reason = "no_improvement_on_validation" if (result["best_epoch"] == 0 or plain_after > plain_before * ratio) else None
-        old_mae, new_mae = plain_before, plain_after
+            n = int(fold["test_mask"].sum())
+            mae_sum += n * np.array([row["val_mae"] for row in run["history"]])
+            loss_sum[1:] += np.array([row["train_loss"] for row in run["history"][1:]])
+            points += n
+            logger.info(f"กลุ่ม {i}/{len(folds)} กัน {', '.join(fold['days'])} ({n} จุด): MAE {run['history'][0]['val_mae']:.1f} -> {run['history'][-1]['val_mae']:.1f}")
+        mae_by_epoch = mae_sum / points                  # MAE รวมทุกวันของแต่ละ epoch; epoch 0 = โมเดลที่ใช้งานอยู่
+        best_epoch = int(np.argmin(mae_by_epoch))
+        real_before, real_after = float(mae_by_epoch[0]), float(mae_by_epoch[best_epoch])
+        history = [{"epoch": 0, "val_mae": round(real_before, 3)}] + [
+            {"epoch": e, "train_loss": round(float(loss_sum[e] / len(folds)), 6), "val_mae": round(float(mae_by_epoch[e]), 3), "lr": lr}
+            for e in range(1, n_epochs + 1)
+        ]
+
+        # โมเดลที่จะนำไปใช้: เทรนจากทุกวันด้วยจำนวน epoch ที่ cross-validation เลือก
+        model = deployed_model()
+        plain_before = evaluate_mae(model, X_plain, Y_plain, target_scaler, dev)
+        if best_epoch > 0:
+            fine_tune(model, X_scaled, Y_scaled, None, None, target_scaler, dev, epochs=best_epoch, lr=lr, train_mask=M_all)
+        plain_after = evaluate_mae(model, X_plain, Y_plain, target_scaler, dev)
+
+        min_improvement = _env_float("RETRAIN_MIN_IMPROVEMENT", 0.03)
+        summary = {
+            "gate": "measured_ghi",
+            "val_mae_before": round(plain_before, 3),   # เทียบกับค่าของ Open-Meteo: ข้อมูลประกอบ ไม่ใช้ตัดสิน
+            "val_mae_after": round(plain_after, 3),
+            "best_epoch": best_epoch,
+            "train_windows": int(len(X_all)),
+            "val_windows": int(len(X_all)),
+            "label_count": int(len(labels_df)),
+            "history": history,
+            "holdout_day": f"{test_days[0]} – {test_days[-1]}",
+            "test_days": len(test_days),
+            "measured_days": measured_days,
+            "new_days": len(new_days),
+            "cv_folds": len(folds),
+            "real_val_points": points,
+            "real_mae_before": round(real_before, 3),
+            "real_mae_after": round(real_after, 3),
+            "min_improvement": min_improvement,
+        }
+        improved = best_epoch > 0 and accepts(real_before, real_after, min_improvement)
+        reason = None if improved else "no_improvement_on_measured_ghi"
+        old_mae, new_mae = real_before, real_after
 
         if reason is not None:
+            mark_days_used()
             _log_mlflow(summary, deployed=False, reason=reason)
             return {"status": "rejected", "reason": reason, **summary}
 
@@ -531,6 +629,12 @@ def execute_timeseries_retrain(
                     "real_mae_before": summary.get("real_mae_before"),
                     "real_mae_after": summary.get("real_mae_after"),
                     "holdout_day": summary.get("holdout_day"),
+                    "test_days": summary.get("test_days"),
+                    "measured_days": summary.get("measured_days"),
+                    "cv_folds": summary.get("cv_folds"),
+                    # ทุกวันที่โมเดลนี้และโมเดลก่อนหน้าในสายเดียวกันเคยเทรน: รอบถัดไปไม่ใช้วันเหล่านี้ตรวจ
+                    "trained_days": sorted(trained | all_days),
+                    "min_improvement": summary.get("min_improvement"),
                     "train_windows": summary["train_windows"],
                     "val_windows": summary["val_windows"],
                     "lookback_days": lookback_days,
@@ -551,8 +655,9 @@ def execute_timeseries_retrain(
         client.fput_object(MINIO_BUCKET, f"{MINIO_PREFIX}/solar_ghi_lstm.onnx", str(MODELS_DIR / "solar_ghi_lstm.onnx"))
         client.fput_object(MINIO_BUCKET, f"{MINIO_PREFIX}/model_meta.json", str(MODELS_DIR / "model_meta.json"))  # meta ขึ้นทีหลังสุด
 
+        mark_days_used()
         _log_mlflow(summary, deployed=True, version=new_meta["version"])
-        logger.info(f">> DEPLOYED v{new_meta['version']} val_mae {old_mae:.2f} -> {new_mae:.2f}")
+        logger.info(f">> DEPLOYED v{new_meta['version']} MAE เทียบค่าวัดจริง {old_mae:.2f} -> {new_mae:.2f}")
         return {
             "status": "deployed",
             "version": new_meta["version"],
@@ -589,6 +694,9 @@ def _log_mlflow(summary: dict[str, Any], deployed: bool, reason: Optional[str] =
             if "real_mae_before" in summary:
                 mlflow.log_metrics({"real_mae_before": summary["real_mae_before"], "real_mae_after": summary["real_mae_after"]})
                 mlflow.set_tag("holdout_day", summary["holdout_day"])
+            for name in ("min_improvement", "test_days", "measured_days", "new_days", "cv_folds"):
+                if name in summary:
+                    mlflow.log_param(name, summary[name])
             mlflow.set_tag("gate", summary["gate"])
             log_history(mlflow, summary.get("history"))  # learning curve: one point per epoch
             mlflow.set_tag("deployed", str(deployed))

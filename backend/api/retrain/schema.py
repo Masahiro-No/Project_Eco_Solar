@@ -35,7 +35,10 @@ class LstmStatus(BaseModel):
     trained_at: Optional[str] = None
     lookback_steps: Optional[int] = None
     previous_version: Optional[str] = None
-    scheduled: bool = Field(False, description="A retrain is waiting for the debounce delay")
+    new_days: Optional[int] = Field(None, description="Days with measured GHI that no retrain has used yet")
+    days_needed: Optional[int] = Field(None, description="New days needed before the next retrain runs")
+    checked_at: Optional[str] = None
+    scheduled: bool = Field(False, description="New measured values were saved; the days are counted after the debounce delay")
     running: bool = False
 
 

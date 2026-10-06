@@ -80,6 +80,9 @@ class BatchSubmitGroundTruthResponse(BaseModel):
     rejected: list[RejectedItem]
     retrain_enqueued: bool
     retrain_status: str
+    weather_rows_added: int = Field(0, description="Weather slots fetched from Open-Meteo for saved days that had none")
+    weather_status: str = Field("not_needed", description="added | not_needed | no_weather_yet | no_data | failed")
+    weather_message: str | None = Field(None, description="Why the weather could not be fetched, when it failed")
 
 
 class CalibrationStatusResponse(BaseModel):
@@ -108,10 +111,13 @@ class UploadPreviewResponse(BaseModel):
 
 class UploadGroundTruthResponse(BatchSubmitGroundTruthResponse):
     filename: str
-    date: str
+    date: str = Field(..., description="Start date chosen for the import (Thailand time)")
+    first_date: str = Field(..., description="First day that was imported")
+    last_date: str = Field(..., description="Last day that was imported")
+    days: int = Field(..., description="Number of days imported")
     total_rows: int
     invalid_rows: int
-    outside_day: int
+    before_start: int = Field(..., description="Rows before the start date, not imported")
     duplicates_collapsed: int
     clamped_negative: int
 

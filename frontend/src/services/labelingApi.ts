@@ -41,6 +41,10 @@ export interface BatchSubmitResponse {
   rejected: { index: number; reason: string }[];
   retrain_enqueued: boolean;
   retrain_status: string;
+  /** weather slots fetched from Open-Meteo for saved days that had none */
+  weather_rows_added: number;
+  weather_status: string; // added | not_needed | no_weather_yet | no_data | failed
+  weather_message: string | null;
 }
 
 export interface UploadPreviewResponse {
@@ -54,10 +58,14 @@ export interface UploadPreviewResponse {
 
 export interface UploadGroundTruthResponse extends BatchSubmitResponse {
   filename: string;
+  /** start date chosen for the import; first_date..last_date are the days that were imported */
   date: string;
+  first_date: string;
+  last_date: string;
+  days: number;
   total_rows: number;
   invalid_rows: number;
-  outside_day: number;
+  before_start: number;
   duplicates_collapsed: number;
   clamped_negative: number;
 }

@@ -16,8 +16,13 @@ Label Studio project "Solar GHI Ground Truth Verification"
 หนึ่ง label = หนึ่ง task + หนึ่ง annotation, คีย์ = (สถานี, ช่องเวลา 10 นาที) ส่งซ้ำคือแก้ค่าเดิม
         │
         ▼
+ดึงสภาพอากาศย้อนหลังจาก Open-Meteo ถ้าวันที่บันทึกค่า (และวันก่อนหน้า) ยังไม่มีสภาพอากาศในระบบ
+เติมเฉพาะช่องที่ยังไม่มี ดึงไม่ได้ก็ยังบันทึกค่าวัดจริง และบอกในคำตอบ (weather_status, weather_rows_added)
+        │
+        ▼
 นัดงาน train_timeseries_lstm ใน train_queue หลังรอ RETRAIN_DEBOUNCE_SECONDS (ค่าเริ่มต้น 300 วินาที)
 label ที่ส่งมาในช่วงรอจะรวมเป็นรอบเดียว และไม่นัดเมื่อ ENABLE_RETRAIN=false
+งานนั้นนับวันที่มีค่าวัดจริงใหม่ก่อน: ครบ 7 วันจึง retrain ไม่ครบก็จบโดยบันทึกจำนวนที่นับได้ (ดู docs/retraining.md)
 ```
 
 ## กติกาเวลา
@@ -33,7 +38,7 @@ label ที่ส่งมาในช่วงรอจะรวมเป็�
 | `POST` | `/api/label-studio/ground-truth/submit` | บันทึกค่า GHI จริง 1 ค่า |
 | `POST` | `/api/label-studio/ground-truth/batch-submit` | บันทึกหลายค่าจากตารางหน้าเว็บ (ไม่เกิน 2,000 ค่าต่อครั้ง) คืนจำนวนที่สร้าง แก้ ไม่เปลี่ยน และรายการที่ถูกปฏิเสธ |
 | `POST` | `/api/label-studio/ground-truth/upload/preview` | อ่านหัวตารางและแถวตัวอย่างของไฟล์ และเดาคอลัมน์เวลากับ GHI ให้ผู้ใช้เลือก |
-| `POST` | `/api/label-studio/ground-truth/upload` | นำเข้าไฟล์ csv / xlsx เฉพาะแถวของวันที่เลือก (เวลาไทย) ไฟล์ไม่เกิน 5 MB และ 20,000 แถว |
+| `POST` | `/api/label-studio/ground-truth/upload` | นำเข้าไฟล์ csv / xlsx ทุกแถวตั้งแต่วันเริ่มต้นที่เลือกเป็นต้นไป (เวลาไทย) ไฟล์เดียวมีได้หลายวัน ไม่เกิน 5 MB และ 20,000 แถว คืนจำนวนวันและช่วงวันที่ที่นำเข้า |
 | `GET` `POST` | `/api/label-studio/projects` | ดูและสร้าง project ใน Label Studio |
 | `GET` `POST` | `/api/label-studio/projects/{id}/tasks` | ดูและเพิ่ม task |
 | `GET` `POST` | `/api/label-studio/projects/{id}/tasks/{task_id}/annotations` | ดูและเพิ่ม annotation |

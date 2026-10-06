@@ -499,6 +499,9 @@ export default function LabelingPage() {
             </li>
             {isFileResult(result) && (
               <>
+                <li className="col-span-2 md:col-span-3">
+                  {t('lb_days_imported')}: <b>{result.days}</b> ({result.first_date === result.last_date ? result.first_date : `${result.first_date} – ${result.last_date}`})
+                </li>
                 <li>
                   {t('lb_file_rows')}: <b>{result.total_rows}</b>
                 </li>
@@ -509,7 +512,7 @@ export default function LabelingPage() {
                   {t('lb_clamped')}: <b>{result.clamped_negative}</b>
                 </li>
                 <li>
-                  {t('lb_outside')}: <b>{result.outside_day}</b>
+                  {t('lb_outside')}: <b>{result.before_start}</b>
                 </li>
                 <li>
                   {t('lb_invalid_rows')}: <b>{result.invalid_rows}</b>
@@ -519,7 +522,18 @@ export default function LabelingPage() {
             <li className="col-span-2 md:col-span-3">
               {t('lb_retrain')}: <b>{result.retrain_status}</b>
             </li>
+            {result.weather_rows_added > 0 && (
+              <li className="col-span-2 md:col-span-3">
+                {t('lb_weather_added')}: <b>{result.weather_rows_added}</b>
+              </li>
+            )}
           </ul>
+          {['failed', 'no_data', 'no_weather_yet'].includes(result.weather_status) && (
+            <p className="mt-2 text-[12px] text-amber-700">
+              {t('lb_weather_missing')}
+              {result.weather_message ? ` (${result.weather_message})` : ''}
+            </p>
+          )}
           {result.rejected.length > 0 && (
             <p className="mt-2 text-[12px] text-red-600">
               {result.rejected.slice(0, 5).map((r) => `#${r.index + 1}: ${r.reason}`).join(' · ')}

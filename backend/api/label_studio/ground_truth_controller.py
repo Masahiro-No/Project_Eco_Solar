@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth.model import User
 from api.auth.service import require_admin
+from api.ingestion.service import IngestionService
 from api.label_studio import file_import
 from api.label_studio.ground_truth import (
     CALIBRATION_RUNNING_KEY,
     CALIBRATION_SCHEDULED_KEY,
+    TH_TZ,
     GroundTruthStore,
     parse_label_timestamp,
     schedule_calibration_check,
@@ -39,8 +41,13 @@ async def _require_station(db: AsyncSession, station_id: str) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Solar station '{station_id}' not found.")
 
 
-async def store_labels(station_id: str, raw_items: list[dict], source: str):
-    """validate -> upsert เข้า Label Studio -> นัด retrain. คืน (summary, rejected, enqueued, retrain_status)."""
+async def store_labels(db: AsyncSession, station_id: str, raw_items: list[dict], source: str):
+    """validate -> upsert เข้า Label Studio -> ดึงสภาพอากาศของวันที่ยังไม่มี -> นัด retrain.
+
+    คืน (summary, rejected, enqueued, retrain_status, weather) โดย weather คือผลของ
+    IngestionService.backfill_weather_for_days: ค่าวัดจริงของวันที่ระบบไม่มีสภาพอากาศใช้ retrain ไม่ได้
+    จึงดึงสภาพอากาศของวันนั้นจาก Open-Meteo มาเติมเฉพาะช่องที่ยังไม่มี
+    """
     rejected: list[dict] = []
     rows: dict = {}  # slot -> (index, slot, ghi, extra); ช่องซ้ำในชุดเดียวกัน: ค่าหลังสุดชนะ
     for i, raw in enumerate(raw_items):
@@ -62,12 +69,20 @@ async def store_labels(station_id: str, raw_items: list[dict], source: str):
     except Exception as e:  # noqa: BLE001  (Label Studio ล่ม / token หมดอายุ / ฯลฯ)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Label Studio error: {e}") from None
 
-    enqueued, retrain_status = await schedule_retrain(station_id, summary.changed)
+    try:
+        weather = await IngestionService.backfill_weather_for_days(
+            db, station_id, sorted({slot.astimezone(TH_TZ).date() for slot in rows})
+        )
+    except Exception as e:  # noqa: BLE001  ค่าวัดจริงถูกบันทึกแล้ว: การดึงสภาพอากาศไม่สำเร็จไม่ทำให้การบันทึกล้ม
+        weather = {"rows_added": 0, "status": "failed", "message": str(e)}
+
+    # สภาพอากาศที่เพิ่งเติมทำให้ค่าวัดจริงที่บันทึกไว้ก่อนใช้ได้: นับวันใหม่อีกครั้งแม้ label ไม่เปลี่ยน
+    enqueued, retrain_status = await schedule_retrain(station_id, summary.changed + weather["rows_added"])
     await schedule_calibration_check(summary.changed)  # สูตรแสงของสถานีนี้เทียบกับค่าวัดจริงแล้วหรือยัง
-    return summary, rejected + summary.rejected, enqueued, retrain_status
+    return summary, rejected + summary.rejected, enqueued, retrain_status, weather
 
 
-def _batch_response(station_id: str, received: int, summary, rejected, enqueued, retrain_status) -> dict:
+def _batch_response(station_id: str, received: int, summary, rejected, enqueued, retrain_status, weather) -> dict:
     return {
         "station_id": station_id,
         "received": received,
@@ -77,6 +92,9 @@ def _batch_response(station_id: str, received: int, summary, rejected, enqueued,
         "rejected": rejected,
         "retrain_enqueued": enqueued,
         "retrain_status": retrain_status,
+        "weather_rows_added": weather["rows_added"],
+        "weather_status": weather["status"],
+        "weather_message": weather["message"],
     }
 
 
@@ -87,8 +105,8 @@ async def submit_ground_truth(
 ) -> SubmitGroundTruthResponse:
     """ส่ง GHI จริง 1 ค่า -> Label Studio (สร้าง/อัปเดต) -> นัด retrain."""
     await _require_station(db, payload.station_id)
-    summary, rejected, enqueued, retrain_status = await store_labels(
-        payload.station_id, [payload.model_dump()], source="manual"
+    summary, rejected, enqueued, retrain_status, _weather = await store_labels(
+        db, payload.station_id, [payload.model_dump()], source="manual"
     )
     if rejected:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=rejected[0]["reason"])
@@ -111,11 +129,11 @@ async def batch_submit_ground_truth(
 ) -> BatchSubmitGroundTruthResponse:
     """ส่ง GHI จริงหลายค่า (จากตารางหน้าเว็บ)."""
     await _require_station(db, payload.station_id)
-    summary, rejected, enqueued, retrain_status = await store_labels(
-        payload.station_id, [i.model_dump() for i in payload.items], source=payload.source
+    summary, rejected, enqueued, retrain_status, weather = await store_labels(
+        db, payload.station_id, [i.model_dump() for i in payload.items], source=payload.source
     )
     return BatchSubmitGroundTruthResponse(
-        **_batch_response(payload.station_id, len(payload.items), summary, rejected, enqueued, retrain_status)
+        **_batch_response(payload.station_id, len(payload.items), summary, rejected, enqueued, retrain_status, weather)
     )
 
 
@@ -140,29 +158,39 @@ async def upload_ground_truth_file(
     db: AsyncSession = Depends(get_db_session),
     _: User = Depends(require_admin),
 ) -> UploadGroundTruthResponse:
-    """นำเข้า GHI จริงจากไฟล์ CSV/XLSX เฉพาะแถวที่อยู่ในวันที่เลือก (เวลาไทย) ตามคอลัมน์ที่ผู้ใช้ระบุ."""
+    """นำเข้า GHI จริงจากไฟล์ CSV/XLSX ตามคอลัมน์ที่ผู้ใช้ระบุ: ทุกแถวตั้งแต่วันเริ่มต้น `date` เป็นต้นไป (เวลาไทย).
+
+    ไฟล์เดียวมีได้หลายวัน แถวก่อนวันเริ่มต้นถูกข้าม
+    """
     await _require_station(db, station_id)
     content = await file.read()
     try:
         parsed = file_import.parse_ground_truth_file(
-            file.filename or "", content, timestamp_col=timestamp_col or None, ghi_col=ghi_col or None, day=date
+            file.filename or "", content, timestamp_col=timestamp_col or None, ghi_col=ghi_col or None, start_day=date
         )
     except file_import.FileImportError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from None
     if not parsed.items:
+        in_file = (
+            f" ข้อมูลในไฟล์อยู่ในช่วงวันที่ {parsed.file_first_day.isoformat()} ถึง {parsed.file_last_day.isoformat()}"
+            if parsed.file_first_day else ""
+        )
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"ไม่มีแถวที่ใช้ได้ในวันที่ {date.isoformat()} (อยู่นอกวันที่เลือก {parsed.outside_day} แถว, ใช้ไม่ได้ {len(parsed.invalid)} แถว)",
+            detail=f"ไม่มีแถวที่ใช้ได้ตั้งแต่วันที่ {date.isoformat()} (อยู่ก่อนวันเริ่มต้น {parsed.before_start} แถว, ใช้ไม่ได้ {len(parsed.invalid)} แถว){in_file}",
         )
 
-    summary, rejected, enqueued, retrain_status = await store_labels(station_id, parsed.items, source="file")
+    summary, rejected, enqueued, retrain_status, weather = await store_labels(db, station_id, parsed.items, source="file")
     return UploadGroundTruthResponse(
-        **_batch_response(station_id, len(parsed.items), summary, rejected, enqueued, retrain_status),
+        **_batch_response(station_id, len(parsed.items), summary, rejected, enqueued, retrain_status, weather),
         filename=file.filename or "",
         date=date.isoformat(),
+        first_date=parsed.days[0].isoformat(),
+        last_date=parsed.days[-1].isoformat(),
+        days=len(parsed.days),
         total_rows=parsed.total_rows,
         invalid_rows=len(parsed.invalid),
-        outside_day=parsed.outside_day,
+        before_start=parsed.before_start,
         duplicates_collapsed=parsed.duplicates_collapsed,
         clamped_negative=parsed.clamped_negative,
     )
