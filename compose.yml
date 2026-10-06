@@ -211,7 +211,9 @@ services:
       RETRAIN_LOOKBACK_DAYS: "45"
       LABEL_STUDIO_URL: "http://label-studio:8080"
       LABEL_STUDIO_API_KEY: "${LABEL_STUDIO_API_KEY:-}"
-      # a new LSTM is used only when its error against the measured GHI of the held-out day drops by at least this share
+      # the LSTM retrain runs once measured GHI of this many new days has been saved (days are counted, not uploads)
+      RETRAIN_MIN_NEW_DAYS: "7"
+      # a new LSTM is used only when its error against measured GHI, over every held-out day, drops by at least this share
       RETRAIN_MIN_IMPROVEMENT: "0.03"
       # --- ConvLSTM retrain on real satellite frames (starts when a batch of new daytime scans is complete) ---
       CONVLSTM_RETRAIN_THRESHOLD: "50"

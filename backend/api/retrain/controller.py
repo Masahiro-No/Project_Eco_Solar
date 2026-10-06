@@ -22,6 +22,7 @@ async def get_retrain_status(
     """Deployed versions, what is pending and the retrain history of the LSTM and the ConvLSTM."""
     pending = {"lstm_scheduled": False, "lstm_running": False, "convlstm_scheduled": False, "convlstm_running": False}
     batch: dict = {}
+    days: dict = {}
     try:
         pool = await JobService.get_pool()
         try:
@@ -31,6 +32,8 @@ async def get_retrain_status(
             pending["convlstm_running"] = bool(await pool.exists(service.CONVLSTM_RUNNING_KEY))
             raw = await pool.get(service.CONVLSTM_STATUS_KEY)
             batch = json.loads(raw) if raw else {}
+            raw = await pool.get(service.LSTM_STATUS_KEY)
+            days = json.loads(raw) if raw else {}
         finally:
             await pool.close()
     except Exception:  # noqa: BLE001  Redis down: the deployed models and the history are still reported
@@ -39,7 +42,14 @@ async def get_retrain_status(
     history, history_error = await asyncio.to_thread(service.read_history, history_limit)
     return RetrainStatusResponse(
         retrain_enabled=settings.enable_retrain,
-        lstm={**service.deployed_lstm(), "scheduled": pending["lstm_scheduled"], "running": pending["lstm_running"]},
+        lstm={
+            **service.deployed_lstm(),
+            "new_days": days.get("new_days"),
+            "days_needed": days.get("days_needed"),
+            "checked_at": days.get("checked_at"),
+            "scheduled": pending["lstm_scheduled"],
+            "running": pending["lstm_running"],
+        },
         convlstm={
             **service.deployed_convlstm(),
             "new_scans": batch.get("new_scans"),

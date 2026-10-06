@@ -13,7 +13,14 @@ import numpy as np
 import pandas as pd
 
 from service.training.dataset import ALIGNED_FEATURE_COLS, FORECAST_STEPS, LOOKBACK_STEPS
-from service.training.features import build_station_frame, make_live_windows, make_windows, measured_day_split
+from service.training.features import (
+    build_station_frame,
+    day_folds,
+    forecast_days,
+    make_live_windows,
+    make_windows,
+    measured_slots_per_day,
+)
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "model" / "time-series"
 
@@ -123,38 +130,51 @@ def test_live_windows_take_inputs_from_weather_and_targets_from_measured_values(
     assert len(make_live_windows(plain, _measured(plain, []), stride=1)[0]) == 0
 
 
-def test_newest_measured_day_decides_and_the_day_before_picks_the_epoch():
+def test_every_measured_day_is_held_out_once_and_never_trained_on_in_its_own_fold():
     w = _synthetic_weather(days=7, start="2026-10-01 00:00")
     plain = build_station_frame(w)
     measured = _measured(plain, [s for d in (3, 4, 6) for s in _day_stamps(d)])
     X, Y, M, starts = make_live_windows(plain, measured, stride=1)
+    days = forecast_days(starts)
+    assert days.shape == M.shape
 
-    split = measured_day_split(starts, M)
-    assert split["gate_day"] == "2026-10-06" and split["select_day"] == "2026-10-04"
-    train, gate, select = split["train_idx"], split["gate_idx"], split["select_idx"]
-    assert len(train) and len(gate) and len(select)
-    assert not set(train) & set(gate) and not set(train) & set(select) and not set(gate) & set(select)
-    assert split["gate_mask"].shape == (len(gate), FORECAST_STEPS) and split["select_mask"].shape == (len(select), FORECAST_STEPS)
-    assert int(split["gate_mask"].sum()) == 18 * FORECAST_STEPS   # ค่าวัดจริงทุกค่าของวันตัดสินถูกใช้ตัดสิน
+    folds = day_folds(days, M)
+    assert [f["days"] for f in folds] == [["2026-10-03"], ["2026-10-04"], ["2026-10-06"]]   # 3 วัน: กันทีละวัน
+    for fold in folds:
+        held = np.array(fold["days"], dtype="datetime64[D]")
+        assert len(fold["train_idx"]) and len(fold["test_idx"]) and not set(fold["train_idx"]) & set(fold["test_idx"])
+        assert not np.isin(days[fold["train_idx"]], held).any()            # ไม่มี window เทรนที่ช่องพยากรณ์แตะวันที่กันไว้
+        assert fold["test_mask"].shape == (len(fold["test_idx"]), FORECAST_STEPS)
+        assert np.isin(days[fold["test_idx"]][fold["test_mask"]], held).all()
+    # ค่าวัดจริงทุกค่าถูกใช้ตรวจหนึ่งครั้งพอดี
+    assert sum(int(f["test_mask"].sum()) for f in folds) == int(M.sum())
 
-    # ไม่มี window เทรนที่ช่วงพยากรณ์แตะวันตัดสินหรือวันเลือก epoch
-    step = np.timedelta64(10, "m")
-    target_days = ((starts[train, None] + step * (LOOKBACK_STEPS + np.arange(FORECAST_STEPS))[None, :]) + np.timedelta64(7, "h")).astype("datetime64[D]")
-    assert set(np.unique(target_days).astype(str)) == {"2026-10-03"}
+    # วันมากกว่าจำนวนกลุ่ม: แจกวันเข้ากลุ่มสลับกันตามเวลา ทุกวันยังถูกกันไว้ครั้งเดียว
+    two = day_folds(days, M, max_folds=2)
+    assert [f["days"] for f in two] == [["2026-10-03", "2026-10-06"], ["2026-10-04"]]
+    assert sum(int(f["test_mask"].sum()) for f in two) == int(M.sum())
 
-    # มีค่าวัดจริง 2 วัน: ไม่มีวันเลือก epoch วันแรกใช้เทรน วันล่าสุดใช้ตัดสิน
-    two = _measured(plain, [s for d in (3, 6) for s in _day_stamps(d)])
-    _, _, M2, starts2 = make_live_windows(plain, two, stride=1)
-    split2 = measured_day_split(starts2, M2)
-    assert split2["gate_day"] == "2026-10-06" and split2["select_day"] is None and len(split2["select_idx"]) == 0
-    assert len(split2["train_idx"]) > 0
-
-    # มีค่าวัดจริงวันเดียว หรือวันตัดสินมีค่าวัดน้อยเกินไป: ตัดสินไม่ได้
+    # มีค่าวัดจริงวันเดียว: ไม่มีวันให้เทรน จึงแบ่งไม่ได้
     _, _, M1, starts1 = make_live_windows(plain, _measured(plain, _day_stamps(3)), stride=1)
-    assert measured_day_split(starts1, M1) is None
-    thin = _measured(plain, _day_stamps(3) + _day_stamps(6, slots=1))
-    _, _, M3, starts3 = make_live_windows(plain, thin, stride=1)
-    assert measured_day_split(starts3, M3, min_points=20) is None
+    assert day_folds(forecast_days(starts1), M1) == []
+
+
+def test_new_days_are_counted_by_date_not_by_upload():
+    from service.training.retrain_timeseries import days_with_new_values
+
+    w = _synthetic_weather(days=7, start="2026-10-01 00:00")
+    plain = build_station_frame(w)
+    # 3 ต.ค. มีค่าวัด 18 ช่อง, 4 ต.ค. มี 2 ช่อง; ค่าหนึ่งช่องเป็นเป้าหมายของหลาย window แต่นับช่องละครั้ง
+    _, _, M, starts = make_live_windows(plain, _measured(plain, _day_stamps(3) + _day_stamps(4, slots=2)), stride=1)
+    assert measured_slots_per_day(starts, M) == {"2026-10-03": 18, "2026-10-04": 2}
+    assert measured_slots_per_day(starts[:0], M[:0]) == {}
+
+    used = {"ST-002|2026-10-01", "ST-002|2026-10-02"}
+    assert days_with_new_values(used, used) == []
+    # สองสถานีในวันเดียวกัน = 1 วัน; สถานีใหม่ในวันที่เคยใช้แล้วก็นับวันนั้น
+    now = used | {"ST-002|2026-10-03", "ST-003|2026-10-03", "ST-003|2026-10-01"}
+    assert days_with_new_values(now, used) == ["2026-10-01", "2026-10-03"]
+    assert days_with_new_values(now, set()) == ["2026-10-01", "2026-10-02", "2026-10-03"]
 
 
 def test_new_model_is_accepted_only_for_a_clear_improvement():
@@ -194,7 +214,7 @@ def test_fine_tune_learns_only_from_the_steps_it_is_given():
 
     masked, masked_mae = run(mask)
     _, unmasked_mae = run(None)
-    assert masked["best_epoch"] == 2 and "val_mae" not in masked["history"][-1]   # ไม่มีวันเลือก epoch: ใช้สถานะสุดท้าย
+    assert masked["best_epoch"] == 2 and "val_mae" not in masked["history"][-1]   # ไม่มีชุดตรวจ: ใช้สถานะสุดท้าย
     assert masked_mae < unmasked_mae / 2   # ไม่กรองช่อง: ช่องที่ใส่ค่า 5000 ลากผลพยากรณ์ไปไกลกว่ามาก
 
 

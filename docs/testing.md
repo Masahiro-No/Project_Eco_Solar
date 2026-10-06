@@ -6,7 +6,7 @@
 
 ## ชุดทดสอบ
 
-ชุดทดสอบของ worker (48 รายการ):
+ชุดทดสอบของ worker (49 รายการ):
 
 ```bash
 docker exec trainer-worker sh -c 'cd /workspace && pip install -q pytest && python -m pytest service/tests -q'

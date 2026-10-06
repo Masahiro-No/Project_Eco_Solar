@@ -62,7 +62,17 @@ export function LstmStatusPanel({ refreshKey }: { refreshKey?: unknown }) {
         <div>
           <p className="font-semibold text-ink">{t('rt_next')}</p>
           <p className="mt-0.5 font-semibold text-ink">
-            {!status ? '—' : !status.retrain_enabled ? t('fr_retrain_off') : lstm?.running ? t('rt_state_running') : lstm?.scheduled ? t('rt_lstm_scheduled') : t('rt_lstm_idle')}
+            {!status
+              ? '—'
+              : !status.retrain_enabled
+                ? t('fr_retrain_off')
+                : lstm?.running
+                  ? t('rt_state_running')
+                  : lstm?.scheduled
+                    ? t('rt_lstm_scheduled')
+                    : lstm?.new_days != null && lstm.days_needed
+                      ? `${lstm.new_days} / ${lstm.days_needed} ${t('rt_days_unit')}`
+                      : t('rt_lstm_idle')}
           </p>
           <p className="mt-1 text-[12px] text-slate-600">{t('rt_lstm_trigger_short')}</p>
         </div>

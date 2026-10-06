@@ -95,6 +95,10 @@ export interface RetrainStatus {
     trained_at: string | null;
     lookback_steps: number | null;
     previous_version: string | null;
+    /** days with measured GHI that no retrain has used yet, out of days_needed; null until the first count */
+    new_days: number | null;
+    days_needed: number | null;
+    checked_at: string | null;
     scheduled: boolean;
     running: boolean;
   };

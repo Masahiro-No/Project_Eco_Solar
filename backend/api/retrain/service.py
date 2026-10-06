@@ -24,6 +24,7 @@ EXPERIMENTS = {"lstm": "solar_lstm_retrain", "convlstm": "solar_convlstm_retrain
 # Redis keys (service/training/retrain_timeseries.py and service/workers/convlstm_batch.py)
 LSTM_SCHEDULED_KEY = "retrain:timeseries:scheduled"
 LSTM_LOCK_KEY = "retrain:timeseries:lock"
+LSTM_STATUS_KEY = "retrain:timeseries:status"
 CONVLSTM_SCHEDULED_KEY = "convlstm:retrain:scheduled"
 CONVLSTM_RUNNING_KEY = "convlstm:retrain:running"
 CONVLSTM_STATUS_KEY = "convlstm:retrain:status"
@@ -142,7 +143,8 @@ def lstm_run(run: dict[str, Any], deployed: dict[str, Any]) -> dict[str, Any]:
             "val_mae_before": metrics.get("val_mae_before"),
             "val_mae_after": metrics.get("val_mae_after"),
             "holdout_day": tags.get("holdout_day"),
-            "select_day": tags.get("select_day"),
+            "measured_days": params.get("measured_days"),
+            "cv_folds": params.get("cv_folds"),
             # set since the run feeds the model weather only, as in a live forecast; absent = the older check,
             # which had measured GHI in the model input, so its real_mae is lower than in real use
             "min_improvement": params.get("min_improvement"),

@@ -18,6 +18,7 @@ Label Studio project "Solar GHI Ground Truth Verification"
         ▼
 นัดงาน train_timeseries_lstm ใน train_queue หลังรอ RETRAIN_DEBOUNCE_SECONDS (ค่าเริ่มต้น 300 วินาที)
 label ที่ส่งมาในช่วงรอจะรวมเป็นรอบเดียว และไม่นัดเมื่อ ENABLE_RETRAIN=false
+งานนั้นนับวันที่มีค่าวัดจริงใหม่ก่อน: ครบ 7 วันจึง retrain ไม่ครบก็จบโดยบันทึกจำนวนที่นับได้ (ดู docs/retraining.md)
 ```
 
 ## กติกาเวลา

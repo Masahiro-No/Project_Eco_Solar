@@ -187,48 +187,51 @@ def make_live_windows(
     return np.stack(xs), np.stack(ys), np.stack(masks), np.array(starts, dtype="datetime64[ns]")
 
 
-def measured_day_split(
-    starts: np.ndarray,
-    mask: np.ndarray,
-    lookback: int = LOOKBACK_STEPS,
-    min_points: int = 20,
-) -> Optional[dict]:
-    """แบ่ง window ของ make_live_windows ตามวัน (เวลาไทย) ของช่องพยากรณ์ที่มีค่าวัดจริง
+def forecast_days(starts: np.ndarray, lookback: int = LOOKBACK_STEPS, horizon: int = FORECAST_STEPS) -> np.ndarray:
+    """วัน (เวลาไทย) ของทุกช่องพยากรณ์ของแต่ละ window -> (n, horizon) datetime64[D]"""
+    step = np.timedelta64(10, "m")
+    times = starts[:, None] + step * (lookback + np.arange(horizon))[None, :]
+    return (times + np.timedelta64(7, "h")).astype("datetime64[D]")
 
-    - วันล่าสุดที่มีค่าวัดจริง = วันตัดสิน (gate): ไม่ใช้เทรน ไม่ใช้เลือก epoch ใช้วัดว่าโมเดลใหม่ดีกว่าเดิมหรือไม่เท่านั้น
-    - วันก่อนหน้านั้น = วันเลือก epoch (มีเมื่อมีค่าวัดจริงตั้งแต่ 3 วันขึ้นไป): ไม่ใช้เทรน
-    - วันที่เหลือ = ข้อมูลเทรน; window ที่ช่วงพยากรณ์แตะวันตัดสินหรือวันเลือก epoch ถูกตัดออกจากเทรน
 
-    Returns None เมื่อมีค่าวัดจริงน้อยกว่า 2 วัน หรือวันตัดสินมีค่าวัดจริงน้อยกว่า min_points มิฉะนั้น dict:
-        gate_day, select_day ('YYYY-MM-DD' หรือ None), train_idx,
-        gate_idx, gate_mask (len(gate_idx), horizon), select_idx, select_mask
+def measured_slots_per_day(starts: np.ndarray, mask: np.ndarray, lookback: int = LOOKBACK_STEPS) -> dict[str, int]:
+    """จำนวนช่องเวลาที่มีค่าวัดจริงของแต่ละวัน (เวลาไทย) จาก window ของสถานีเดียว
+
+    ค่าวัดหนึ่งช่องเป็นเป้าหมายของหลาย window จึงนับช่องละครั้ง -> {'YYYY-MM-DD': จำนวนช่อง}
     """
     if len(starts) == 0 or not mask.any():
-        return None
-    horizon = mask.shape[1]
+        return {}
     step = np.timedelta64(10, "m")
-    target_times = starts[:, None] + step * (lookback + np.arange(horizon))[None, :]
-    days = (target_times + np.timedelta64(7, "h")).astype("datetime64[D]")
-    measured_days = np.unique(days[mask])
-    if len(measured_days) < 2:
-        return None
-    gate_day = measured_days[-1]
-    select_day = measured_days[-2] if len(measured_days) >= 3 else None
-    gate_mask = mask & (days == gate_day)
-    if int(gate_mask.sum()) < min_points:
-        return None
+    times = starts[:, None] + step * (lookback + np.arange(mask.shape[1]))[None, :]
+    slots = np.unique(times[mask])
+    days, counts = np.unique((slots + np.timedelta64(7, "h")).astype("datetime64[D]"), return_counts=True)
+    return {str(d): int(c) for d, c in zip(days, counts)}
 
-    on_gate = (days == gate_day).any(axis=1)
-    on_select = (days == select_day).any(axis=1) if select_day is not None else np.zeros(len(starts), bool)
-    gate_idx = np.where(gate_mask.any(axis=1))[0]
-    select_mask = mask & (days == select_day) if select_day is not None else np.zeros_like(mask)
-    select_idx = np.where(select_mask.any(axis=1) & ~on_gate)[0]
-    return {
-        "gate_day": str(gate_day),
-        "select_day": str(select_day) if select_day is not None else None,
-        "train_idx": np.where(~on_gate & ~on_select)[0],
-        "gate_idx": gate_idx,
-        "gate_mask": gate_mask[gate_idx],
-        "select_idx": select_idx,
-        "select_mask": select_mask[select_idx],
-    }
+
+def day_folds(days: np.ndarray, mask: np.ndarray, max_folds: int = 7) -> list[dict]:
+    """แบ่งวันที่มีค่าวัดจริงเป็นกลุ่ม ให้ทุกวันถูกกันไว้ตรวจหนึ่งครั้ง (cross-validation ตามวัน)
+
+    วันเรียงตามเวลาแล้วแจกเข้ากลุ่มทีละวันวนไป: มีไม่เกิน max_folds วัน = กันทีละวัน
+    window ที่ช่องพยากรณ์แตะวันของกลุ่มที่กันไว้ไม่ถูกใช้เทรนในรอบของกลุ่มนั้น
+
+    Args:
+        days: ผลของ forecast_days, mask: ผลของ make_live_windows
+    Returns [] เมื่อมีค่าวัดจริงน้อยกว่า 2 วัน มิฉะนั้น list ของ dict:
+        days (list 'YYYY-MM-DD'), train_idx, test_idx, test_mask (len(test_idx), horizon)
+    """
+    measured = np.unique(days[mask]) if mask.any() else np.array([], "datetime64[D]")
+    k = min(len(measured), max_folds)
+    if k < 2:
+        return []
+    folds = []
+    for f in range(k):
+        on_held = np.isin(days, measured[f::k])
+        test_mask = mask & on_held
+        test_idx = np.where(test_mask.any(axis=1))[0]
+        folds.append({
+            "days": [str(d) for d in measured[f::k]],
+            "train_idx": np.where(~on_held.any(axis=1))[0],
+            "test_idx": test_idx,
+            "test_mask": test_mask[test_idx],
+        })
+    return folds
