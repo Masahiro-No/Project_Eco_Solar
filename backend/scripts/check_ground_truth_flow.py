@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 from api.auth.service import get_current_user  # noqa: E402
 from api.inference.model import Prediction  # noqa: E402
 from api.inference.router import router as inference_router  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+
 from api.ingestion.model import WeatherHistory  # noqa: E402
 from api.label_studio import ground_truth as gt  # noqa: E402
 from api.label_studio import file_import  # noqa: E402
@@ -259,6 +261,26 @@ async def check_http_flow():
     JobService.get_pool = staticmethod(_pool)
     settings.enable_retrain = False  # เริ่มจากสถานะปิด retrain เสมอ ไม่ขึ้นกับค่า ENABLE_RETRAIN ของ container
 
+    # คำขอไป Open-Meteo ของการดึงสภาพอากาศย้อนหลัง: ชุดตรวจไม่ออกเครือข่าย ใช้คำตอบที่กำหนดในนี้แทน
+    from api.ingestion import service as ingestion_service
+    from api.ingestion.normalizer import OPEN_METEO_VARIABLES
+
+    weather_calls: list[str] = []
+    weather_answer = {"on": False}
+
+    def fake_weather(url, timeout):
+        weather_calls.append(url)
+        if not weather_answer["on"]:
+            return {"minutely_15": {}}  # Open-Meteo ไม่มีข้อมูลของช่วงที่ขอ
+        q = dict(p.split("=", 1) for p in url.split("?", 1)[1].split("&") if "=" in p)
+        first, last = date.fromisoformat(q["start_date"]), date.fromisoformat(q["end_date"])
+        times = [datetime.combine(first, datetime.min.time()) + timedelta(minutes=15 * i) for i in range(96 * ((last - first).days + 1))]
+        out = {"time": [x.strftime("%Y-%m-%dT%H:%M") for x in times]}
+        out.update({k: [10.0 + x.hour for x in times] for k in OPEN_METEO_VARIABLES})
+        return {"minutely_15": out}
+
+    ingestion_service.fetch_json = fake_weather
+
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         # --- วิธีที่ 1: ดึงค่าพยากรณ์ของวัน
         r = await c.get("/api/inference/predictions-by-date", params={"station_id": "ST-001", "date": "2026-10-02"})
@@ -345,9 +367,44 @@ async def check_http_flow():
         assert r.status_code == 200, r.text
         u = r.json()
         assert (u["created"], u["days"], u["first_date"], u["last_date"], u["before_start"]) == (9, 3, "2026-09-20", "2026-09-22", 0), u
+        # วันเหล่านี้ระบบไม่มีสภาพอากาศ และ Open-Meteo (ตัวแทนในชุดตรวจ) ยังไม่มีข้อมูลให้: บันทึก label ได้ และบอกว่าดึงไม่ได้
+        assert (u["weather_status"], u["weather_rows_added"]) == ("no_data", 0), u
         r = await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-09-21"}, files={"file": ("m.csv", MULTI_DAY_CSV)})
         u = r.json()
         assert (u["created"], u["unchanged"], u["days"], u["first_date"], u["before_start"]) == (0, 6, 2, "2026-09-21", 3), u
+
+        # --- สภาพอากาศย้อนหลัง: ค่าวัดจริงของวันที่ระบบไม่มีสภาพอากาศ -> ดึงของวันนั้นและวันก่อนหน้า เติมเฉพาะช่องที่ยังไม่มี
+        async with Session() as db:  # ช่องที่มีแถวอยู่แล้ว (เวลาไม่ตรงกริด และ source อื่น) ต้องไม่ถูกเก็บซ้ำ
+            db.add(WeatherHistory(station_id="ST-001", timestamp=datetime(2026, 9, 21, 3, 14, tzinfo=UTC), ghi=1.0, dni=0, clearsky_ghi=900, clearsky_index=0.5,
+                                  solar_zenith_angle=30, temperature=30, relative_humidity=60, wind_speed=1, cloud_cover=10, source="test"))
+            await db.commit()
+        three_days = {"data": {"station_id": "ST-001", "date": "2026-09-20"}, "files": {"file": ("m.csv", MULTI_DAY_CSV)}}
+        weather_answer["on"] = True
+        weather_calls.clear(); pool.keys.clear(); pool.jobs.clear()
+        settings.enable_retrain = True
+        u = (await c.post("/api/label-studio/ground-truth/upload", **three_days)).json()
+        # 19-22 ก.ย. (UTC) = 4 วัน x 144 ช่อง ลบช่อง 03:10 ของ 21 ก.ย. ที่มีแถวอยู่แล้ว
+        assert (u["created"], u["unchanged"], u["weather_status"], u["weather_rows_added"]) == (0, 9, "added", 4 * 144 - 1), u
+        assert len(weather_calls) == 1 and "start_date=2026-09-19" in weather_calls[0] and "end_date=2026-09-23" in weather_calls[0]
+        assert u["retrain_enqueued"] is True, "label ไม่เปลี่ยน แต่สภาพอากาศเพิ่งมา: ต้องนัดนับวันใหม่"
+        async with Session() as db:
+            added = (await db.execute(select(WeatherHistory).where(WeatherHistory.source == "open_meteo_backfill"))).scalars().all()
+            stamps = {x.timestamp if x.timestamp.tzinfo else x.timestamp.replace(tzinfo=UTC) for x in added}
+            assert len(added) == 575 and all(x.station_id == "ST-001" for x in added) and all(s.minute % 10 == 0 for s in stamps)
+            assert min(stamps) == datetime(2026, 9, 19, tzinfo=UTC) and max(stamps) == datetime(2026, 9, 22, 23, 50, tzinfo=UTC)
+            assert datetime(2026, 9, 21, 3, 10, tzinfo=UTC) not in stamps
+            noon = next(x for x in added if x.timestamp.hour == 5 and x.timestamp.minute == 0)  # 12:00 เวลาไทย
+            assert noon.temperature == 15.0 and noon.clearsky_ghi > 500 and noon.solar_zenith_angle < 40   # ค่าจากคำตอบ + ตำแหน่งดวงอาทิตย์ที่คำนวณ
+        # ครั้งถัดไป: ไม่มีช่องขาดแล้ว จึงไม่เรียก Open-Meteo อีก และไม่นัดอะไรเพิ่ม
+        weather_calls.clear(); pool.keys.clear(); pool.jobs.clear()
+        u = (await c.post("/api/label-studio/ground-truth/upload", **three_days)).json()
+        assert (u["weather_status"], u["weather_rows_added"], u["retrain_enqueued"]) == ("not_needed", 0, False) and weather_calls == [], u
+        # วันที่ใหม่กว่าสภาพอากาศล่าสุดของสถานี เป็นหน้าที่ของรอบดึงสดและ catch-up: ไม่ดึงที่นี่
+        u = (await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-10-04"}, files={"file": ("a.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes())})).json()
+        assert (u["unchanged"], u["weather_status"]) == (53, "not_needed") and weather_calls == [], u
+        weather_answer["on"] = False
+        settings.enable_retrain = False
+        pool.keys.clear(); pool.jobs.clear()
         r = await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-10-04", "ghi_col": "nope"}, files={"file": ("a.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes())})
         assert r.status_code == 422
         r = await c.post("/api/label-studio/ground-truth/upload/preview", files={"file": ("a.pdf", b"x")})
@@ -417,7 +474,7 @@ async def check_http_flow():
         r = await c.post("/api/label-studio/ground-truth/batch-submit", json={"station_id": "ST-001", "items": [{"timestamp": "2026-10-02T13:30:00", "ghi_actual": 1.0}]})
         assert r.status_code == 502 and "token expired" in r.json()["detail"]
         ls_service.LabelStudioService = FakeLS
-    print("PASS http flow (predictions-by-date, batch-submit, upload, debounce retrain, LS down)")
+    print("PASS http flow (predictions-by-date, batch-submit, upload, past weather, debounce retrain, LS down)")
     await engine.dispose()
 
 

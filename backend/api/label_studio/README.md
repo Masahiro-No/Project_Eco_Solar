@@ -16,6 +16,10 @@ Label Studio project "Solar GHI Ground Truth Verification"
 หนึ่ง label = หนึ่ง task + หนึ่ง annotation, คีย์ = (สถานี, ช่องเวลา 10 นาที) ส่งซ้ำคือแก้ค่าเดิม
         │
         ▼
+ดึงสภาพอากาศย้อนหลังจาก Open-Meteo ถ้าวันที่บันทึกค่า (และวันก่อนหน้า) ยังไม่มีสภาพอากาศในระบบ
+เติมเฉพาะช่องที่ยังไม่มี ดึงไม่ได้ก็ยังบันทึกค่าวัดจริง และบอกในคำตอบ (weather_status, weather_rows_added)
+        │
+        ▼
 นัดงาน train_timeseries_lstm ใน train_queue หลังรอ RETRAIN_DEBOUNCE_SECONDS (ค่าเริ่มต้น 300 วินาที)
 label ที่ส่งมาในช่วงรอจะรวมเป็นรอบเดียว และไม่นัดเมื่อ ENABLE_RETRAIN=false
 งานนั้นนับวันที่มีค่าวัดจริงใหม่ก่อน: ครบ 7 วันจึง retrain ไม่ครบก็จบโดยบันทึกจำนวนที่นับได้ (ดู docs/retraining.md)

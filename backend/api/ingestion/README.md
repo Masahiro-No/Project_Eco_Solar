@@ -21,7 +21,7 @@
 
 ## ไฟล์
 
-- `service.py` ดึง Open-Meteo และ NICT เติมช่องที่ขาด (`auto_catchup_weather`, `auto_catchup_satellite`) และอ่านข้อมูลให้ API
+- `service.py` ดึง Open-Meteo และ NICT เติมช่องที่ขาด (`auto_catchup_weather`, `auto_catchup_satellite`) ดึงสภาพอากาศของวันเก่าที่มีค่าวัดจริงแต่ระบบยังไม่มีสภาพอากาศ (`backfill_weather_for_days` เรียกจากมอดูล `label_studio` ตอนบันทึกค่าวัดจริง แถวที่ได้มี `source = open_meteo_backfill`) และอ่านข้อมูลให้ API
 - `normalizer.py` แปลงคำตอบของ Open-Meteo เป็นแถว และจัดค่าราย 15 นาทีลงช่อง 10 นาที
 - `solar_calculator.py` ตำแหน่งดวงอาทิตย์และ GHI ฟ้าใส (สูตรเดียวกับ `service/workers/solar_geometry.py`)
 - `forecast_frames.py` อ่านภาพที่ ConvLSTM ทำนายจาก bucket `satellite-forecast`

@@ -80,6 +80,9 @@ class BatchSubmitGroundTruthResponse(BaseModel):
     rejected: list[RejectedItem]
     retrain_enqueued: bool
     retrain_status: str
+    weather_rows_added: int = Field(0, description="Weather slots fetched from Open-Meteo for saved days that had none")
+    weather_status: str = Field("not_needed", description="added | not_needed | no_weather_yet | no_data | failed")
+    weather_message: str | None = Field(None, description="Why the weather could not be fetched, when it failed")
 
 
 class CalibrationStatusResponse(BaseModel):

@@ -522,7 +522,18 @@ export default function LabelingPage() {
             <li className="col-span-2 md:col-span-3">
               {t('lb_retrain')}: <b>{result.retrain_status}</b>
             </li>
+            {result.weather_rows_added > 0 && (
+              <li className="col-span-2 md:col-span-3">
+                {t('lb_weather_added')}: <b>{result.weather_rows_added}</b>
+              </li>
+            )}
           </ul>
+          {['failed', 'no_data', 'no_weather_yet'].includes(result.weather_status) && (
+            <p className="mt-2 text-[12px] text-amber-700">
+              {t('lb_weather_missing')}
+              {result.weather_message ? ` (${result.weather_message})` : ''}
+            </p>
+          )}
           {result.rejected.length > 0 && (
             <p className="mt-2 text-[12px] text-red-600">
               {result.rejected.slice(0, 5).map((r) => `#${r.index + 1}: ${r.reason}`).join(' · ')}

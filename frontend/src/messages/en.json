@@ -152,6 +152,8 @@
     "lb_days_imported": "Days imported",
     "lb_invalid_rows": "Unreadable rows",
     "lb_retrain": "Retrain",
+    "lb_weather_added": "Past weather slots fetched from Open-Meteo",
+    "lb_weather_missing": "The measured values were saved, but the past weather of the missing slots could not be fetched. Days without weather cannot be used for retraining yet (Open-Meteo keeps about 3 months).",
     "lb_label_error": "Cannot read labels from Label Studio",
     "lb_login_required": "Not signed in, or the session has expired",
     "lb_login_again": "Sign in again",

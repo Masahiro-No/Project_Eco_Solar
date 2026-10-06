@@ -152,6 +152,8 @@
     "lb_days_imported": "จำนวนวันที่นำเข้า",
     "lb_invalid_rows": "แถวที่อ่านไม่ได้",
     "lb_retrain": "Retrain",
+    "lb_weather_added": "ช่องสภาพอากาศย้อนหลังที่ดึงเพิ่มจาก Open-Meteo",
+    "lb_weather_missing": "บันทึกค่าวัดจริงแล้ว แต่ดึงสภาพอากาศย้อนหลังของช่องที่ยังขาดไม่ได้ วันที่ไม่มีสภาพอากาศจะยังใช้ retrain ไม่ได้ (Open-Meteo เก็บย้อนหลังราว 3 เดือน)",
     "lb_label_error": "อ่าน label จาก Label Studio ไม่ได้",
     "lb_login_required": "ยังไม่ได้เข้าสู่ระบบ หรือเซสชันหมดอายุ",
     "lb_login_again": "เข้าสู่ระบบใหม่",
