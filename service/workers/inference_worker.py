@@ -194,6 +194,15 @@ def _sync_best_model_from_minio(target_dir: Path) -> bool:
         return False
 
 
+# A loaded model stays in memory until its files change (a retrain deploys new ones): five stations every
+# 10 minutes used to read the same files and build the same sessions again each time.
+_MODEL_CACHE: dict[str, tuple[tuple, Any]] = {}
+
+
+def _files_signature(paths) -> tuple:
+    return tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+
+
 def _load_trained_solar_onnx():
     """Load the deployed LSTM: sync from MinIO when it has a newer version, then read the project
     'model/time-series/' directory. Returns (session, feature_scaler, target_scaler, meta).
@@ -212,12 +221,19 @@ def _load_trained_solar_onnx():
     if missing:
         raise RuntimeError(f"lstm_model_unavailable: missing {missing} in '{model_dir}'")
 
+    signature = _files_signature(files.values())
+    cached = _MODEL_CACHE.get("lstm")
+    if cached and cached[0] == signature:
+        return cached[1]
+
     session = ort.InferenceSession(str(files["solar_ghi_lstm.onnx"]))
     feature_scaler = joblib.load(str(files["feature_scaler.joblib"]))
     target_scaler = joblib.load(str(files["target_scaler.joblib"]))
     with open(files["model_meta.json"], "r", encoding="utf-8") as f:
         meta = json.load(f)
-    return session, feature_scaler, target_scaler, meta
+    loaded = (session, feature_scaler, target_scaler, meta)
+    _MODEL_CACHE["lstm"] = (signature, loaded)
+    return loaded
 
 
 def _get_convlstm_model_dir() -> Path:
@@ -291,9 +307,15 @@ def _load_trained_convlstm_onnx():
             print(f"[ConvLSTM Warning] Model file not found in '{model_dir}'")
             return None
 
+        signature = _files_signature([onnx_file])
+        cached = _MODEL_CACHE.get("convlstm")
+        if cached and cached[0] == signature:
+            return cached[1]
+
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 2
         session = ort.InferenceSession(str(onnx_file), opts, providers=["CPUExecutionProvider"])
+        _MODEL_CACHE["convlstm"] = (signature, session)
         print(f"[ConvLSTM Loader] Successfully loaded ConvLSTM from '{onnx_file}'")
         return session
     except Exception as e:
