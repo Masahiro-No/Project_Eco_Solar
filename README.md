@@ -272,7 +272,7 @@ docker compose up -d
 เปิด http://localhost:8080 สมัครบัญชี แล้วคัดลอก Personal Access Token จาก Account & Settings มาใส่ที่ `LABEL_STUDIO_API_KEY` ใน `.env` จากนั้น
 
 ```bash
-docker compose up -d api
+docker compose up -d api trainer-worker
 ```
 
 **สิ่งที่ไม่ได้มากับ git** ค่า GHI ที่วัดจริง ประวัติพยากรณ์ และประวัติ retrain อยู่ในฐานข้อมูล Label Studio และ MLflow ของเครื่องที่รัน เครื่องใหม่จึงเริ่มจากว่าง ส่วนไฟล์โมเดลทั้งสองตัวและค่า calibration อยู่ใน `model/` และมากับ git

@@ -124,7 +124,9 @@ services:
     environment:
       database_url: "postgresql+asyncpg://myuser:mypassword@postgres/mydatabase"
       label_studio_url: "http://label-studio:8080"
-      label_studio_api_key: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
+      # empty on a new machine: the token exists only after Label Studio has started (README, step 5).
+      # Forecasting does not need it; the measured-GHI page and the LSTM retrain do.
+      label_studio_api_key: "${LABEL_STUDIO_API_KEY:-}"
       minio_endpoint: "minio:9000"
       redis_host: "redis"
       redis_port: "6379"
@@ -208,7 +210,7 @@ services:
       DATABASE_URL: "postgresql+psycopg2://myuser:mypassword@postgres/mydatabase"
       RETRAIN_LOOKBACK_DAYS: "45"
       LABEL_STUDIO_URL: "http://label-studio:8080"
-      LABEL_STUDIO_API_KEY: "${LABEL_STUDIO_API_KEY:?set LABEL_STUDIO_API_KEY in .env (see .env.example)}"
+      LABEL_STUDIO_API_KEY: "${LABEL_STUDIO_API_KEY:-}"
       RETRAIN_MAX_REGRESSION_RATIO: "1.0"
       # --- ConvLSTM retrain on real satellite frames (starts when a batch of new daytime scans is complete) ---
       CONVLSTM_RETRAIN_THRESHOLD: "50"
