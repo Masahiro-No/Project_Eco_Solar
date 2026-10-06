@@ -55,7 +55,6 @@ frontend/src/
 | ตัวแปร | ความหมาย |
 |---|---|
 | `NEXT_PUBLIC_API_URL` | ที่อยู่ของ API (ค่าเริ่มต้น `http://localhost:8000`) |
-| `NEXT_PUBLIC_DEMO_MODE` | `true` = เติมอีเมลและรหัสผ่านของบัญชี operator ตั้งต้นในหน้า login ให้ ต้องเป็น `false` เมื่อใช้งานจริง |
 
 ค่า `NEXT_PUBLIC_*` ถูกฝังลงในไฟล์ตอน build แก้ค่าแล้วต้อง build ใหม่
 

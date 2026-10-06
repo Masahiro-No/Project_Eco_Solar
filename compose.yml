@@ -132,6 +132,7 @@ services:
       # admin account (private zone); the password lives in the git-ignored .env
       admin_email: "${ADMIN_EMAIL:-admin@solardss.io}"
       admin_password: "${ADMIN_PASSWORD:-}"
+      operator_password: "${OPERATOR_PASSWORD:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_SERVICE_NAME: "fastapi"
       OTEL_RESOURCE_ATTRIBUTES: "service.version=0.1.0"
@@ -163,7 +164,6 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8000
-        NEXT_PUBLIC_DEMO_MODE: "false"
     container_name: frontend
     restart: unless-stopped
     ports:

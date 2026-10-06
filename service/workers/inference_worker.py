@@ -279,7 +279,7 @@ def _sync_convlstm_from_minio(target_dir: Path) -> bool:
 
 
 def _load_trained_convlstm_onnx():
-    """Hybrid ConvLSTM model loader with project-first strategy and MinIO sync fallback."""
+    """The deployed ConvLSTM (synced from MinIO when it has a newer version), or None: no other file stands in for it."""
     try:
         import onnxruntime as ort
 
@@ -287,15 +287,6 @@ def _load_trained_convlstm_onnx():
         _sync_convlstm_from_minio(model_dir)
 
         onnx_file = model_dir / "cloud_seq2seq_12to18.onnx"
-        if not onnx_file.exists():
-            for fallback in [
-                Path("/workspace/Non_time_series/cloud_seq2seq_12to18.onnx"),
-                Path(__file__).resolve().parent.parent.parent / "Non_time_series" / "cloud_seq2seq_12to18.onnx",
-            ]:
-                if fallback.exists():
-                    onnx_file = fallback
-                    break
-
         if not onnx_file.exists():
             print(f"[ConvLSTM Warning] Model file not found in '{model_dir}'")
             return None

@@ -1,11 +1,9 @@
 import io
 import json
-import os
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,10 +11,8 @@ from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
 from api.ingestion.normalizer import MissingWeatherValue, OPEN_METEO_VARIABLES, WeatherDataNormalizer
 from api.ingestion.schema import IngestionStatusResponse, SatelliteFrameItem, WeatherRecentItem
 from api.ingestion.solar_calculator import SolarCalculator
-from api.stations.model import Station
 from api.stations.service import StationService
 from api.storage.service import StorageService
-from core.config import settings
 
 NICT_LATEST_JSON = "https://himawari8-dl.nict.go.jp/himawari8/img/D531106/latest.json"
 SATELLITE_BUCKET = "satellite-cache"
@@ -196,7 +192,7 @@ class IngestionService:
 
     @staticmethod
     async def auto_catchup_weather(
-        db: AsyncSession, station_id: str = "ST-001", max_gap_days: int = 7
+        db: AsyncSession, station_id: str, max_gap_days: int = 7
     ) -> dict:
         """Detect gap since latest recorded weather and automatically backfill missing 10-minute intervals.
 
@@ -227,7 +223,7 @@ class IngestionService:
 
         is_fresh = latest_ts is None
         if is_fresh:
-            # Fresh station: fetch last 2 days to satisfy 144-step lookback for LSTM
+            # New station: fetch the last 2 days, well over the 36 slots (6 hours) the LSTM looks back
             latest_ts = now_utc - timedelta(days=2)
 
         gap_seconds = (now_utc - latest_ts).total_seconds()
@@ -341,7 +337,7 @@ class IngestionService:
 
     @staticmethod
     async def auto_catchup_satellite(
-        db: AsyncSession, station_id: str = "ST-001", count: int = 12
+        db: AsyncSession, station_id: str, count: int = 12
     ) -> dict:
         """Ensure station has the latest N consecutive 10-minute satellite frames.
 

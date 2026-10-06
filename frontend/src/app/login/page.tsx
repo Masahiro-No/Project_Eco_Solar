@@ -18,12 +18,10 @@ import {
   LineChartIcon,
   ShieldCheckIcon,
   SparklesIcon,
-  Building2Icon,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
-import { DEMO_MODE } from '@/lib/config';
 
 export default function LoginPage() {
   const t = useTranslations('common');
@@ -32,8 +30,8 @@ export default function LoginPage() {
   const { isLoggedIn, login, register } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState(DEMO_MODE ? 'operator@solardss.io' : '');
-  const [password, setPassword] = useState(DEMO_MODE ? 'operator1234' : '');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
@@ -111,20 +109,6 @@ export default function LoginPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
     setConfirmPassword('');
-  };
-
-  const handleQuickDemo = async () => {
-    setEmail('operator@solardss.io');
-    setPassword('operator1234');
-    setLoading(true);
-    const result = await login('operator@solardss.io', 'operator1234', 'Grid Operator');
-    setLoading(false);
-    if (result.success) {
-      setSuccessMsg(t('login_success'));
-      setTimeout(() => {
-        router.push('/');
-      }, 700);
-    }
   };
 
   return (
@@ -433,46 +417,6 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {/* Quick Demo Section (demo mode only) */}
-            {DEMO_MODE && (
-            <div className="mt-5 border-t border-line pt-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11.5px] font-semibold text-slate-500">
-                  {t('login_demo_badge')}
-                </span>
-                <span className="rounded bg-ok-soft px-2 py-0.5 text-[10.5px] font-bold text-ok">
-                  Ready to test
-                </span>
-              </div>
-              <p className="text-[11px] text-muted mb-2.5 leading-tight">
-                {t('login_demo_hint')}
-              </p>
-
-              <div className="flex flex-col gap-2">
-                {/* Sign In as Grid Operator Demo Button */}
-                <button
-                  type="button"
-                  onClick={handleQuickDemo}
-                  disabled={loading}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-brand/30 bg-brand-soft px-3 py-2 text-xs font-bold text-brand transition-colors hover:bg-brand-soft/80"
-                >
-                  <SparklesIcon className="h-3.5 w-3.5 text-brand" />
-                  <span>{t('login_quick_btn')}</span>
-                </button>
-
-                {/* Sign In with Enterprise SSO Button */}
-                <button
-                  type="button"
-                  disabled
-                  title="SSO is not configured yet"
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
-                >
-                  <Building2Icon className="h-3.5 w-3.5 text-slate-500" />
-                  <span>Sign In with Enterprise SSO</span>
-                </button>
-              </div>
-            </div>
-            )}
           </div>
         </div>
       </main>

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Application settings."""
     # ระบุ env_file เป็น ENV_PATH แทนการใช้แค่ ".env"
     APP_NAME: str = "FastAPI Application"
-    DEBUG_MODE: bool = True
+    DEBUG_MODE: bool = False
     model_config = SettingsConfigDict(env_file=ENV_PATH, env_file_encoding="utf-8")
 
     database_url: str
@@ -28,8 +28,12 @@ class Settings(BaseSettings):
     retrain_debounce_seconds: int = 300  # รอรวม label ที่ส่งใกล้กันก่อนเริ่ม retrain
     convlstm_retrain_threshold: int = 50  # new daytime satellite scans that make one ConvLSTM retrain batch
     mlflow_tracking_uri: str = "http://mlflow:5000"  # retrain history shown on the admin page
+    grafana_url: str = "http://localhost:3002"  # where a browser reaches Grafana (compose publishes it on 127.0.0.1:3002)
     # admin account created at startup when a password is configured (ADMIN_PASSWORD in the root .env)
     admin_email: str = "admin@solardss.io"
     admin_password: Optional[str] = None
+    # operator account created at startup when a password is configured (OPERATOR_PASSWORD in the root .env)
+    operator_email: str = "operator@solardss.io"
+    operator_password: Optional[str] = None
 
 settings = Settings()

@@ -242,6 +242,7 @@ cp .env.example .env
 
 - `LABEL_STUDIO_API_KEY` — Personal Access Token จาก Label Studio (Account & Settings)
 - `ADMIN_PASSWORD` — รหัสผ่านบัญชีผู้ดูแล (อย่างน้อย 8 ตัว) บัญชีถูกสร้างตอน API เริ่มทำงาน
+- `OPERATOR_PASSWORD` — รหัสผ่านของบัญชี `operator@solardss.io` (ไม่บังคับ) ถ้าตั้งไว้ บัญชีจะถูกสร้างหรือเปลี่ยนรหัสผ่านตอน API เริ่มทำงาน ถ้าไม่ตั้ง ระบบไม่สร้างบัญชีนี้
 - `ENABLE_RETRAIN` — `true` เพื่อให้ retrain อัตโนมัติ
 
 ```bash
@@ -253,7 +254,7 @@ docker compose up -d
 บัญชีผู้ใช้
 
 - ผู้ดูแล (admin): อีเมลและรหัสผ่านคือ `ADMIN_EMAIL` และ `ADMIN_PASSWORD` ใน `.env` ถ้าจะเปลี่ยนรหัสผ่าน ให้แก้ใน `.env` แล้วสั่ง `docker compose up -d api`
-- ผู้ควบคุมระบบ (operator): สมัครเองได้ที่แท็บ Sign Up ของหน้า login บัญชีที่สมัครได้สิทธิ์ operator เสมอ สิทธิ์ admin ให้ได้โดย admin เท่านั้น
+- ผู้ควบคุมระบบ (operator): สมัครเองได้ที่แท็บ Sign Up ของหน้า login (หรือใช้บัญชี `operator@solardss.io` เมื่อตั้ง `OPERATOR_PASSWORD` ใน `.env` ไม่มีรหัสผ่านตั้งต้นในโค้ด) บัญชีที่สมัครได้สิทธิ์ operator เสมอ สิทธิ์ admin ให้ได้โดย admin เท่านั้น
 - บัญชี operator ตั้งต้นสำหรับทดลอง อยู่ในโค้ด seed ที่ `backend/db/database.py`
 
 ### เมื่อแก้โค้ด

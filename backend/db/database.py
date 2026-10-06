@@ -157,15 +157,14 @@ async def seed_default_stations() -> None:
                 )
                 session.add(station)
 
-        # 2. Seed Default Operator User
-        user_stmt = select(User).where(User.email == "operator@solardss.io")
-        existing_user = (await session.execute(user_stmt)).scalar_one_or_none()
-        if not existing_user:
-            user = User(
-                email="operator@solardss.io",
-                password_hash=pwd_context.hash("operator1234"),
-            )
-            session.add(user)
+        # 2. Operator account, only when a password is configured (never a built-in default)
+        if settings.operator_password:
+            operator = (await session.execute(select(User).where(User.email == settings.operator_email))).scalar_one_or_none()
+            if operator is None:
+                session.add(User(email=settings.operator_email, password_hash=pwd_context.hash(settings.operator_password)))
+            elif not pwd_context.verify(settings.operator_password, operator.password_hash):
+                # OPERATOR_PASSWORD in .env is this account's password: changing it there and restarting the API changes it
+                operator.password_hash = pwd_context.hash(settings.operator_password)
 
         # 3. Admin account, only when a password is configured (never a built-in default)
         if settings.admin_password:

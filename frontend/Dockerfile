@@ -19,9 +19,7 @@ COPY . .
 # NEXT_PUBLIC_* values are inlined into the client bundle at build time,
 # so they must be provided as build args (not only as runtime env).
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
-ARG NEXT_PUBLIC_DEMO_MODE=false
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_DEMO_MODE=$NEXT_PUBLIC_DEMO_MODE
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 

@@ -89,12 +89,9 @@ def load_splits_from_minio(
     from minio import Minio
 
     if minio_client is None:
-        minio_client = Minio(
-            "localhost:9000",
-            access_key="admin",
-            secret_key="password",
-            secure=False,
-        )
+        from service.training.retrain_timeseries import _minio_client  # the storage settings every trainer uses
+
+        minio_client = _minio_client()
 
     dfs = {}
     for name in ["train_10min.csv", "val_10min.csv", "test_10min.csv"]:

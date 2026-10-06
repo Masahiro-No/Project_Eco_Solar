@@ -3,10 +3,6 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class IngestTriggerRequest(BaseModel):
-    station_id: Optional[str] = Field("ST-001", description="Station ID to fetch data for (all if None)")
-
-
 class SatelliteFrameItem(BaseModel):
     frame_no: int
     timestamp: datetime
@@ -73,8 +69,8 @@ class IngestionStatusResponse(BaseModel):
 
 
 class CatchupRequest(BaseModel):
-    station_id: Optional[str] = Field("ST-001", description="Station ID to catch up (default: ST-001)")
-    max_gap_days: Optional[int] = Field(7, ge=1, le=30, description="Maximum days of gap to backfill")
+    station_id: str = Field(..., description="Station ID to catch up")
+    max_gap_days: int = Field(7, ge=1, le=7, description="Days of weather gap to backfill (Open-Meteo is asked for at most 7)")
 
 
 class CatchupResponse(BaseModel):

@@ -13,7 +13,9 @@ from api.dashboard.schema import (
     StationDashboardResponse,
 )
 from api.inference.model import Prediction
-from api.stations.model import Station
+from core.config import settings
+
+GRAFANA_DASHBOARD_UID = "solardss-operations"  # uid in observability/grafana/provisioning/dashboards
 from api.stations.service import StationService
 
 
@@ -138,9 +140,6 @@ class DashboardService:
 
     @staticmethod
     def get_grafana_links() -> GrafanaLinksResponse:
-        """Return Grafana dashboard URLs."""
-        base_grafana = "http://localhost:3000"
-        return GrafanaLinksResponse(
-            system_health_dashboard_url=f"{base_grafana}/d/system-health/solar-system-metrics",
-            model_performance_dashboard_url=f"{base_grafana}/d/model-monitoring/solar-model-drift",
-        )
+        """Where Grafana is and the one dashboard this project provisions (observability/grafana/provisioning)."""
+        base = settings.grafana_url.rstrip("/")
+        return GrafanaLinksResponse(grafana_url=base, operations_dashboard_url=f"{base}/d/{GRAFANA_DASHBOARD_UID}")
