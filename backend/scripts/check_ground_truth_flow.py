@@ -136,17 +136,23 @@ def check_time_rules():
     print("PASS time rules (ปัดลง, naive=เวลาไทย)")
 
 
+# 3 วัน วันละ 3 ช่อง (10:00, 10:10, 10:20 เวลาไทย)
+MULTI_DAY_CSV = ("timestamp,ghi_actual\n" + "".join(
+    f"2026-09-{d} 10:{m}:00,{400 + int(d) + int(m)}\n" for d in ("20", "21", "22") for m in ("00", "10", "20")
+)).encode()
+
+
 def check_sample_files():
     results, preview = {}, {}
     for name in ("sample_solar_intensity.csv", "sample_solar_intensity.xlsx"):
         content = (SAMPLES / name).read_bytes()
         preview[name] = file_import.preview(name, content)
-        p = file_import.parse_ground_truth_file(name, content, day=date(2026, 10, 4))
+        p = file_import.parse_ground_truth_file(name, content, start_day=date(2026, 10, 4))
         assert not p.invalid, p.invalid
         results[name] = (p, {gt.parse_label_timestamp(i["timestamp"]): i["ghi_actual"] for i in p.items})
         assert p.total_rows == 59 and p.clamped_negative == 6
         assert all(gt.parse_label_timestamp(i["timestamp"]).minute % 10 == 0 for i in p.items)
-        assert p.duplicates_collapsed + len(p.items) == 59 - p.outside_day
+        assert p.duplicates_collapsed + len(p.items) == 59 - p.before_start and p.days == [date(2026, 10, 4)]
         # 12:15 เวลาไทย ซ้ำ 7 แถว -> ปัดลงเป็น 12:10 = 05:10 UTC เก็บค่าของ ID สูงสุด
         assert results[name][1][datetime(2026, 10, 4, 5, 10, tzinfo=UTC)] == 1032.89
     for pv in preview.values():
@@ -155,10 +161,20 @@ def check_sample_files():
     csv_p, csv_d = results["sample_solar_intensity.csv"]
     xl_p, xl_d = results["sample_solar_intensity.xlsx"]
     assert csv_d == xl_d, "CSV (xx:x5) กับ XLSX (xx:x5:02) ต้องได้ช่องเวลาและค่าเหมือนกัน"
-    assert (csv_p.duplicates_collapsed, csv_p.outside_day) == (xl_p.duplicates_collapsed, xl_p.outside_day)
-    # วันอื่น -> ไม่มีแถวในวันนั้นเลย
-    other = file_import.parse_ground_truth_file("x.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes(), day=date(2026, 10, 5))
-    assert other.items == [] and other.outside_day == 59
+    assert (csv_p.duplicates_collapsed, csv_p.before_start) == (xl_p.duplicates_collapsed, xl_p.before_start)
+    # วันเริ่มต้นอยู่หลังข้อมูล -> ไม่มีแถวให้นำเข้า และบอกได้ว่าข้อมูลในไฟล์เป็นของวันไหน
+    other = file_import.parse_ground_truth_file("x.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes(), start_day=date(2026, 10, 5))
+    assert other.items == [] and other.before_start == 59 and other.days == []
+    assert other.file_first_day == other.file_last_day == date(2026, 10, 4)
+    # วันเริ่มต้นอยู่ก่อนข้อมูล -> เข้าครบ
+    early = file_import.parse_ground_truth_file("x.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes(), start_day=date(2026, 9, 1))
+    assert len(early.items) == len(csv_p.items) and early.before_start == 0
+    # ไฟล์เดียวหลายวัน: เข้าทุกวันตั้งแต่วันเริ่มต้น แถวก่อนหน้านั้นถูกข้าม
+    many = file_import.parse_ground_truth_file("m.csv", MULTI_DAY_CSV, start_day=date(2026, 9, 20))
+    assert many.days == [date(2026, 9, 20), date(2026, 9, 21), date(2026, 9, 22)] and len(many.items) == 9 and many.before_start == 0
+    later = file_import.parse_ground_truth_file("m.csv", MULTI_DAY_CSV, start_day=date(2026, 9, 21))
+    assert later.days == [date(2026, 9, 21), date(2026, 9, 22)] and len(later.items) == 6 and later.before_start == 3
+    assert (later.file_first_day, later.file_last_day) == (date(2026, 9, 20), date(2026, 9, 22))
     # เลือกคอลัมน์เอง / เลือกผิด
     c = (SAMPLES / "sample_solar_intensity.csv").read_bytes()
     assert len(file_import.parse_ground_truth_file("a.csv", c, timestamp_col="date/time", ghi_col="solar intensity value").items) == len(csv_p.items)
@@ -318,11 +334,20 @@ async def check_http_flow():
             u = r.json()
             if name.endswith(".csv"):
                 first = u
-                assert u["created"] == 53 and u["clamped_negative"] == 6 and u["total_rows"] == 59 and u["outside_day"] == 0
+                assert u["created"] == 53 and u["clamped_negative"] == 6 and u["total_rows"] == 59 and u["before_start"] == 0
+                assert (u["days"], u["first_date"], u["last_date"]) == (1, "2026-10-04", "2026-10-04")
             else:  # ไฟล์เดียวกันอีกรูปแบบ -> ช่องเดิมทั้งหมด ไม่มีอะไรเปลี่ยน
                 assert u["created"] == 0 and u["unchanged"] == 53 and u["duplicates_collapsed"] == first["duplicates_collapsed"], u
         r = await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-10-05"}, files={"file": ("a.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes())})
-        assert r.status_code == 422 and "2026-10-05" in r.json()["detail"]
+        assert r.status_code == 422 and "2026-10-05" in r.json()["detail"] and "2026-10-04" in r.json()["detail"]
+        # ไฟล์เดียว 3 วัน: เข้าครบทุกวันในครั้งเดียว; เลื่อนวันเริ่มต้นไปวันที่สอง = ข้ามวันแรก
+        r = await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-09-20"}, files={"file": ("m.csv", MULTI_DAY_CSV)})
+        assert r.status_code == 200, r.text
+        u = r.json()
+        assert (u["created"], u["days"], u["first_date"], u["last_date"], u["before_start"]) == (9, 3, "2026-09-20", "2026-09-22", 0), u
+        r = await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-09-21"}, files={"file": ("m.csv", MULTI_DAY_CSV)})
+        u = r.json()
+        assert (u["created"], u["unchanged"], u["days"], u["first_date"], u["before_start"]) == (0, 6, 2, "2026-09-21", 3), u
         r = await c.post("/api/label-studio/ground-truth/upload", data={"station_id": "ST-001", "date": "2026-10-04", "ghi_col": "nope"}, files={"file": ("a.csv", (SAMPLES / "sample_solar_intensity.csv").read_bytes())})
         assert r.status_code == 422
         r = await c.post("/api/label-studio/ground-truth/upload/preview", files={"file": ("a.pdf", b"x")})

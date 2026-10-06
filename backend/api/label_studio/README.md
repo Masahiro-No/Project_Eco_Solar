@@ -34,7 +34,7 @@ label ที่ส่งมาในช่วงรอจะรวมเป็�
 | `POST` | `/api/label-studio/ground-truth/submit` | บันทึกค่า GHI จริง 1 ค่า |
 | `POST` | `/api/label-studio/ground-truth/batch-submit` | บันทึกหลายค่าจากตารางหน้าเว็บ (ไม่เกิน 2,000 ค่าต่อครั้ง) คืนจำนวนที่สร้าง แก้ ไม่เปลี่ยน และรายการที่ถูกปฏิเสธ |
 | `POST` | `/api/label-studio/ground-truth/upload/preview` | อ่านหัวตารางและแถวตัวอย่างของไฟล์ และเดาคอลัมน์เวลากับ GHI ให้ผู้ใช้เลือก |
-| `POST` | `/api/label-studio/ground-truth/upload` | นำเข้าไฟล์ csv / xlsx เฉพาะแถวของวันที่เลือก (เวลาไทย) ไฟล์ไม่เกิน 5 MB และ 20,000 แถว |
+| `POST` | `/api/label-studio/ground-truth/upload` | นำเข้าไฟล์ csv / xlsx ทุกแถวตั้งแต่วันเริ่มต้นที่เลือกเป็นต้นไป (เวลาไทย) ไฟล์เดียวมีได้หลายวัน ไม่เกิน 5 MB และ 20,000 แถว คืนจำนวนวันและช่วงวันที่ที่นำเข้า |
 | `GET` `POST` | `/api/label-studio/projects` | ดูและสร้าง project ใน Label Studio |
 | `GET` `POST` | `/api/label-studio/projects/{id}/tasks` | ดูและเพิ่ม task |
 | `GET` `POST` | `/api/label-studio/projects/{id}/tasks/{task_id}/annotations` | ดูและเพิ่ม annotation |

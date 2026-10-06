@@ -499,6 +499,9 @@ export default function LabelingPage() {
             </li>
             {isFileResult(result) && (
               <>
+                <li className="col-span-2 md:col-span-3">
+                  {t('lb_days_imported')}: <b>{result.days}</b> ({result.first_date === result.last_date ? result.first_date : `${result.first_date} – ${result.last_date}`})
+                </li>
                 <li>
                   {t('lb_file_rows')}: <b>{result.total_rows}</b>
                 </li>
@@ -509,7 +512,7 @@ export default function LabelingPage() {
                   {t('lb_clamped')}: <b>{result.clamped_negative}</b>
                 </li>
                 <li>
-                  {t('lb_outside')}: <b>{result.outside_day}</b>
+                  {t('lb_outside')}: <b>{result.before_start}</b>
                 </li>
                 <li>
                   {t('lb_invalid_rows')}: <b>{result.invalid_rows}</b>

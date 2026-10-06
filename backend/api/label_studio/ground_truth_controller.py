@@ -140,19 +140,26 @@ async def upload_ground_truth_file(
     db: AsyncSession = Depends(get_db_session),
     _: User = Depends(require_admin),
 ) -> UploadGroundTruthResponse:
-    """นำเข้า GHI จริงจากไฟล์ CSV/XLSX เฉพาะแถวที่อยู่ในวันที่เลือก (เวลาไทย) ตามคอลัมน์ที่ผู้ใช้ระบุ."""
+    """นำเข้า GHI จริงจากไฟล์ CSV/XLSX ตามคอลัมน์ที่ผู้ใช้ระบุ: ทุกแถวตั้งแต่วันเริ่มต้น `date` เป็นต้นไป (เวลาไทย).
+
+    ไฟล์เดียวมีได้หลายวัน แถวก่อนวันเริ่มต้นถูกข้าม
+    """
     await _require_station(db, station_id)
     content = await file.read()
     try:
         parsed = file_import.parse_ground_truth_file(
-            file.filename or "", content, timestamp_col=timestamp_col or None, ghi_col=ghi_col or None, day=date
+            file.filename or "", content, timestamp_col=timestamp_col or None, ghi_col=ghi_col or None, start_day=date
         )
     except file_import.FileImportError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from None
     if not parsed.items:
+        in_file = (
+            f" ข้อมูลในไฟล์อยู่ในช่วงวันที่ {parsed.file_first_day.isoformat()} ถึง {parsed.file_last_day.isoformat()}"
+            if parsed.file_first_day else ""
+        )
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"ไม่มีแถวที่ใช้ได้ในวันที่ {date.isoformat()} (อยู่นอกวันที่เลือก {parsed.outside_day} แถว, ใช้ไม่ได้ {len(parsed.invalid)} แถว)",
+            detail=f"ไม่มีแถวที่ใช้ได้ตั้งแต่วันที่ {date.isoformat()} (อยู่ก่อนวันเริ่มต้น {parsed.before_start} แถว, ใช้ไม่ได้ {len(parsed.invalid)} แถว){in_file}",
         )
 
     summary, rejected, enqueued, retrain_status = await store_labels(station_id, parsed.items, source="file")
@@ -160,9 +167,12 @@ async def upload_ground_truth_file(
         **_batch_response(station_id, len(parsed.items), summary, rejected, enqueued, retrain_status),
         filename=file.filename or "",
         date=date.isoformat(),
+        first_date=parsed.days[0].isoformat(),
+        last_date=parsed.days[-1].isoformat(),
+        days=len(parsed.days),
         total_rows=parsed.total_rows,
         invalid_rows=len(parsed.invalid),
-        outside_day=parsed.outside_day,
+        before_start=parsed.before_start,
         duplicates_collapsed=parsed.duplicates_collapsed,
         clamped_negative=parsed.clamped_negative,
     )

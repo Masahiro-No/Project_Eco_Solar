@@ -108,10 +108,13 @@ class UploadPreviewResponse(BaseModel):
 
 class UploadGroundTruthResponse(BatchSubmitGroundTruthResponse):
     filename: str
-    date: str
+    date: str = Field(..., description="Start date chosen for the import (Thailand time)")
+    first_date: str = Field(..., description="First day that was imported")
+    last_date: str = Field(..., description="Last day that was imported")
+    days: int = Field(..., description="Number of days imported")
     total_rows: int
     invalid_rows: int
-    outside_day: int
+    before_start: int = Field(..., description="Rows before the start date, not imported")
     duplicates_collapsed: int
     clamped_negative: int
 

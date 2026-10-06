@@ -6,7 +6,7 @@
 กติกา:
 - เวลา: ISO (2026-10-04 14:45:02), วัน/เดือน/ปี (4/10/2026 14:45), ค่าวันที่ของ Excel; ปี พ.ศ. (>2400) -> ค.ศ.
   ไม่มี timezone = เวลาไทย; ปัดลงเป็นช่อง 10 นาที (ground_truth.parse_label_timestamp)
-- เก็บเฉพาะแถวที่ตรงกับ 'วัน' ที่เลือก (เวลาไทย) ถ้าระบุ day
+- ไฟล์เดียวมีได้หลายวัน: เก็บทุกแถวตั้งแต่ 'วันเริ่มต้น' ที่เลือกเป็นต้นไป (เวลาไทย) ถ้าระบุ start_day; แถวก่อนวันนั้นถูกข้าม
 - ค่าติดลบเล็กน้อย (>= -10) เป็น offset ของเซ็นเซอร์ตอนกลางคืน -> 0; ติดลบมากกว่านั้นถือว่าใช้ไม่ได้
 - ช่อง 10 นาทีซ้ำกัน: เก็บแถวที่ ID สูงสุด (ถ้าไม่มีคอลัมน์ ID ใช้แถวท้ายสุดในไฟล์)
 """
@@ -45,7 +45,10 @@ class ParsedFile:
     items: list[dict[str, Any]] = field(default_factory=list)  # {"timestamp": ISO ช่อง UTC, "ghi_actual": float, "notes": str}
     total_rows: int = 0
     invalid: list[tuple[int, str]] = field(default_factory=list)  # (เลขแถวในไฟล์, เหตุผล)
-    outside_day: int = 0
+    before_start: int = 0  # แถวที่อยู่ก่อนวันเริ่มต้นที่เลือก (ไม่นำเข้า)
+    days: list[date] = field(default_factory=list)  # วัน (เวลาไทย) ของ items ที่นำเข้า เรียงตามเวลา
+    file_first_day: Optional[date] = None  # วันแรกและวันสุดท้ายของแถวที่อ่านได้ทั้งไฟล์ (ใช้บอกผู้ใช้เมื่อเลือกวันเริ่มต้นผิด)
+    file_last_day: Optional[date] = None
     duplicates_collapsed: int = 0
     clamped_negative: int = 0
 
@@ -177,7 +180,7 @@ def parse_ground_truth_file(
     content: bytes,
     timestamp_col: Optional[str] = None,
     ghi_col: Optional[str] = None,
-    day: Optional[date] = None,
+    start_day: Optional[date] = None,
 ) -> ParsedFile:
     t = read_table(filename, content)
     guessed = guess_columns(t.headers)
@@ -216,8 +219,11 @@ def parse_ground_truth_file(
         except ValueError:
             out.invalid.append((line_no, "invalid_timestamp"))
             continue
-        if day is not None and slot.astimezone(TH_TZ).date() != day:
-            out.outside_day += 1
+        local_day = slot.astimezone(TH_TZ).date()
+        out.file_first_day = local_day if out.file_first_day is None else min(out.file_first_day, local_day)
+        out.file_last_day = local_day if out.file_last_day is None else max(out.file_last_day, local_day)
+        if start_day is not None and local_day < start_day:
+            out.before_start += 1
             continue
         if ghi < 0:
             if ghi >= -NEGATIVE_TOLERANCE:
@@ -239,4 +245,5 @@ def parse_ground_truth_file(
                 best[slot] = (order, item)
 
     out.items = [best[s][1] for s in sorted(best)]
+    out.days = sorted({s.astimezone(TH_TZ).date() for s in best})
     return out

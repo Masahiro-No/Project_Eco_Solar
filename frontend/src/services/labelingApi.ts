@@ -54,10 +54,14 @@ export interface UploadPreviewResponse {
 
 export interface UploadGroundTruthResponse extends BatchSubmitResponse {
   filename: string;
+  /** start date chosen for the import; first_date..last_date are the days that were imported */
   date: string;
+  first_date: string;
+  last_date: string;
+  days: number;
   total_rows: number;
   invalid_rows: number;
-  outside_day: number;
+  before_start: number;
   duplicates_collapsed: number;
   clamped_negative: number;
 }
