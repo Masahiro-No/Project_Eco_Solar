@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import math
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -25,7 +26,8 @@ OPEN_METEO_WIND_UNIT = "wind_speed_unit=ms"
 
 
 NICT_B03_BASE_URL = "https://himawari8-dl.nict.go.jp/himawari8/img/FULL_24h/B03"
-BLANK_TILE_MIN_SUN_ELEVATION_DEG = 6.0  # same daylight limit as service/workers/satellite_preprocessor.py (cos zenith 0.10)
+# the daylight limit of service/workers/satellite_preprocessor.py (cos zenith 0.10), as a sun elevation: 5.74 degrees
+BLANK_TILE_MIN_SUN_ELEVATION_DEG = math.degrees(math.asin(0.10))
 
 
 def latlon_to_pixel(lat_deg: float, lon_deg: float, full_disk_size: int = 1100) -> tuple[int, int]:

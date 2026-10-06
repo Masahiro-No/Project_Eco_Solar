@@ -274,7 +274,13 @@ docker compose up -d
 docker exec trainer-worker sh -c 'cd /workspace && pip install -q pytest && python -m pytest service/tests -q'
 ```
 
-ตรวจฝั่ง backend 7 หมวด (ช่องเวลา 10 นาที, การเก็บสภาพอากาศ, ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP) ใช้ฐานข้อมูลในหน่วยความจำ ไม่แตะข้อมูลจริง:
+สูตรที่เขียนไว้สองฝั่ง (ตำแหน่งพิกเซลของสถานี ตำแหน่งดวงอาทิตย์ เกณฑ์ภาพดำ) ต้องให้ผลตรงกัน ตรวจใน ingestion-worker ซึ่งมีโค้ดทั้งสองฝั่ง:
+
+```bash
+docker exec ingestion-worker sh -c 'cd /workspace && pip install -q pytest && python -m pytest service/tests/test_same_formulas.py -q'
+```
+
+ตรวจฝั่ง backend 8 หมวด (ช่องเวลา 10 นาที, กฎกันแถวซ้ำ, การเก็บสภาพอากาศ, ตรวจภาพ, กติกาเวลา, ไฟล์ตัวอย่าง, การบันทึก label, flow ผ่าน HTTP) ใช้ฐานข้อมูลในหน่วยความจำ ไม่แตะข้อมูลจริง:
 
 ```bash
 docker exec fastapi sh -c 'cd /app && uv run --with aiosqlite --with httpx python scripts/check_ground_truth_flow.py'
