@@ -509,8 +509,50 @@ def check_weather_ingestion():
     print("PASS weather ingestion (missing value -> no row, a gap in the source stays a gap)")
 
 
+async def check_unique_rows():
+    """A weather row or frame for a key that is already stored is not stored again (database rule)."""
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    from api.ingestion.model import SatelliteFrameMetadata, insert_once
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    t0 = datetime(2026, 10, 6, 3, 0, tzinfo=timezone.utc)
+
+    def weather(minute, source="open_meteo_catchup"):
+        return WeatherHistory(station_id="ST-TEST-99", timestamp=t0 + timedelta(minutes=minute), ghi=500.0, dni=300.0, dhi=200.0,
+                              clearsky_ghi=800.0, clearsky_index=0.6, solar_zenith_angle=30.0, temperature=30.0,
+                              relative_humidity=70.0, wind_speed=2.0, cloud_cover=40.0, surface_pressure=1008.0, source=source)
+
+    def frame(minute):
+        return SatelliteFrameMetadata(station_id="ST-TEST-99", frame_timestamp=t0 + timedelta(minutes=minute), image_url="/x.png")
+
+    async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+        db.add(Station(id="ST-TEST-99", name="t", latitude=7.0, longitude=100.5, panel_area=1.0, efficiency=0.2, target_capacity_kw=1.0))
+        await db.commit()
+        assert (await db.execute(insert_once(db, [weather(0), weather(10)]))).rowcount == 2
+        assert (await db.execute(insert_once(db, [weather(10), weather(20)]))).rowcount == 1       # 03:10 is already stored
+        assert (await db.execute(insert_once(db, [weather(10, source="open_meteo")]))).rowcount == 1   # the live row is another key
+        assert (await db.execute(insert_once(db, [frame(0)]))).rowcount == 1
+        assert (await db.execute(insert_once(db, [frame(0)]))).rowcount == 0
+        await db.commit()
+        assert (await db.execute(select(func.count()).select_from(WeatherHistory))).scalar_one() == 4
+        db.add(weather(0))                                                                         # a plain insert is refused too
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+        else:
+            raise AssertionError("the database stored a second row for the same station, time and source")
+    await engine.dispose()
+    print("PASS unique rows (a stored key is not stored again)")
+
+
 if __name__ == "__main__":
     check_weather_grid()
+    asyncio.run(check_unique_rows())
     check_weather_ingestion()
     check_frame_review()
     check_time_rules()

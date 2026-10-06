@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
+from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory, insert_once
 from api.ingestion.normalizer import MissingWeatherValue, OPEN_METEO_VARIABLES, WeatherDataNormalizer
 from api.ingestion.schema import IngestionStatusResponse, SatelliteFrameItem, WeatherRecentItem
 from api.ingestion.solar_calculator import SolarCalculator
@@ -321,17 +321,17 @@ class IngestionService:
             )
             records.append(record)
 
-        db.add_all(records)
+        stored = (await db.execute(insert_once(db, records))).rowcount
         await db.commit()
 
         return {
             "status": "backfilled",
-            "message": f"Successfully auto-backfilled {len(records)} missing records ({round(gap_hours, 1)}h gap recovered).",
+            "message": f"Successfully auto-backfilled {stored} missing records ({round(gap_hours, 1)}h gap recovered).",
             "station_id": station_id,
             "gap_hours": round(gap_hours, 2),
             "from_timestamp": latest_ts.isoformat(),
             "to_timestamp": now_utc.isoformat(),
-            "records_inserted": len(records),
+            "records_inserted": stored,
             "records_skipped": skipped,
         }
 
@@ -413,8 +413,7 @@ class IngestionService:
                     frame_timestamp=dt_frame,
                     image_url=f"/api/storage/download/{SATELLITE_BUCKET}/{object_name}",
                 )
-                db.add(frame_meta)
-                backfilled_count += 1
+                backfilled_count += (await db.execute(insert_once(db, [frame_meta]))).rowcount
 
         # the dashboard preview ('<station>_latest.png') is written with the newest scan only, never with a backfilled one
 

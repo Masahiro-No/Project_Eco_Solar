@@ -32,6 +32,26 @@ async def create_database_schema() -> None:
         await connection.run_sync(Base.metadata.create_all)
         await connection.run_sync(_ensure_prediction_columns)
         await connection.run_sync(_ensure_user_columns)
+        await connection.run_sync(_ensure_unique_rules)
+
+
+def _ensure_unique_rules(sync_conn) -> None:
+    """create_all() adds no rule to a table that already exists: add the unique rules of weather and frames.
+
+    When rows that break a rule are already stored the rule cannot be added: the API starts anyway and says so
+    (scripts/cleanup_test_data.py --only leftovers lists such rows).
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    from api.ingestion.model import UNIQUE_RULES
+
+    for model, key, name in UNIQUE_RULES:
+        try:
+            with sync_conn.begin_nested():
+                sync_conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {model.__tablename__} ({', '.join(key)})"))
+        except DBAPIError as e:
+            print(f"[Schema Warning] unique rule {name} not added, rows that break it are stored: {str(e.orig)[:200]}")
 
 
 def _ensure_prediction_columns(sync_conn) -> None:

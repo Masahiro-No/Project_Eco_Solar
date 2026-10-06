@@ -43,7 +43,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from sqlalchemy import select
 
 from api.inference.service import InferenceService
-from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory
+from api.ingestion.model import SatelliteFrameMetadata, WeatherHistory, insert_once
 from api.ingestion.normalizer import WeatherDataNormalizer
 from api.ingestion.service import IngestionService, SATELLITE_BUCKET
 from api.stations.model import Station
@@ -197,7 +197,7 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
                                 frame_timestamp=st_dt_frame,
                                 image_url=f"/api/storage/download/{SATELLITE_BUCKET}/{object_name}",
                             )
-                            db.add(frame_record)
+                            await db.execute(insert_once(db, [frame_record]))
                         st_info["satellite_recorded"] = True
                     except Exception as se:
                         logger.warning(f"Failed to store satellite frame for station {st.id}: {se}")
@@ -253,7 +253,7 @@ async def _ingest_round(ctx: dict) -> dict[str, Any]:
                             surface_pressure=canonical.surface_pressure,
                             source=canonical.source,
                         )
-                        db.add(weather_rec)
+                        await db.execute(insert_once(db, [weather_rec]))
                     st_info["weather_recorded"] = True
                     st_info["ghi"] = canonical.ghi
                 except Exception as we:
