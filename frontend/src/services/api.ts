@@ -83,7 +83,7 @@ export interface NearestStationResponse {
 
 export type AlertLevel = 'night' | 'normal' | 'watch' | 'warning' | 'critical';
 export type CloudImpactLevel = 'low' | 'medium' | 'high';
-export type SatelliteStatus = 'ok' | 'shifted' | 'observed_only' | 'missing' | 'night' | 'low_sun' | 'model_unavailable';
+export type SatelliteStatus = 'ok' | 'shifted' | 'gap_skipped' | 'observed_only' | 'missing' | 'night' | 'low_sun' | 'model_unavailable';
 
 export interface PredictionResultData {
   job_id: string;

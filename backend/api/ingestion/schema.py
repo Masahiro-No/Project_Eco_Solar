@@ -48,7 +48,7 @@ class ForecastFrameSet(BaseModel):
 
     end_time: Optional[datetime] = Field(None, description="Newest real frame the forecast starts from")
     created_at: Optional[datetime] = None
-    status: str = Field(..., description="Satellite status of that round: ok | shifted | observed_only | missing | low_sun | night")
+    status: str = Field(..., description="Satellite status of that round: ok | shifted | gap_skipped | observed_only | missing | low_sun | night")
     reason: Optional[str] = None
     model_version: Optional[str] = None
     frames: list[ForecastFrame]

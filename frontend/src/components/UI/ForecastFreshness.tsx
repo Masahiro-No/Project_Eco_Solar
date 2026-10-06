@@ -9,9 +9,12 @@ import { forecastTimeLabel, parseBackendDate } from '@/lib/time';
 /** A prediction is expected every 10 minutes; warn when it is clearly overdue. */
 const STALE_AFTER_MIN = 25;
 
-export function ForecastFreshness() {
-  const t = useTranslations('common');
-  const { isLive, prediction, lastUpdated } = useForecast();
+/**
+ * Age of the forecast on screen. `stale` = overdue: its alert level and numbers describe the time it was made,
+ * not now, so the status card and the tiles do not show them as the current state.
+ */
+export function useForecastAge(): { ageMin: number | null; stale: boolean; runLabel: string } {
+  const { prediction, lastUpdated } = useForecast();
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -20,12 +23,18 @@ export function ForecastFreshness() {
   }, []);
 
   const produced = parseBackendDate(lastUpdated);
-  if (!isLive || !produced) return null;
-
+  if (!produced) return { ageMin: null, stale: false, runLabel: '' };
   const ageMin = Math.max(0, Math.floor((now - produced.getTime()) / 60_000));
-  const stale = ageMin > STALE_AFTER_MIN;
   // forecastTimeLabel(x, 0) = x snapped to the model grid, formatted HH:mm (Thailand time)
-  const runLabel = forecastTimeLabel(prediction?.data_time || lastUpdated, 0);
+  return { ageMin, stale: ageMin > STALE_AFTER_MIN, runLabel: forecastTimeLabel(prediction?.data_time || lastUpdated, 0) };
+}
+
+export function ForecastFreshness() {
+  const t = useTranslations('common');
+  const { isLive } = useForecast();
+  const { ageMin, stale, runLabel } = useForecastAge();
+
+  if (!isLive || ageMin === null) return null;
 
   return (
     <div

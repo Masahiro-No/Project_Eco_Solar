@@ -312,6 +312,8 @@ services:
       TARGET_CLEARSKY_FRACTION: "0.8"
       # --- missing satellite frames: shift the 12-frame window back at most this far ---
       SATELLITE_MAX_SHIFT_MIN: "30"
+      # one older scan missing (daily 02:40 UTC gap): leave it out and give the ConvLSTM 12 real frames; "0" = off
+      SATELLITE_SKIP_ONE_GAP: "1"
     depends_on:
       redis:
         condition: service_healthy

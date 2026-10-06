@@ -43,6 +43,11 @@ CROP_SIZE = 64
 # NICT publishes a frame roughly 20-30 minutes after the scan, so the newest frame is always a bit behind
 MAX_FEED_AGE_MIN = int(os.environ.get("SATELLITE_MAX_FEED_AGE_MIN", "60"))
 MAX_SHIFT_MIN = int(os.environ.get("SATELLITE_MAX_SHIFT_MIN", "30"))
+# One scan missing in the window (every day 02:40 UTC): leave it out and use 12 real frames from 130 minutes.
+# Measured on 135 real sequences (2-4 Oct 2026): same error as a complete window, for a gap that is not one of
+# the newest frames. "0" turns the rule off (then only the newest real frame is used, as before).
+SKIP_ONE_GAP = os.environ.get("SATELLITE_SKIP_ONE_GAP", "1") == "1"
+SKIP_GAP_NEWEST_KEPT = 3  # the three newest scans must be real: a gap there was not measured
 FETCH_TIMEOUT_S = float(os.environ.get("SATELLITE_FETCH_TIMEOUT_S", "8"))
 MAX_NETWORK_ERRORS = 2  # give up early when NICT is unreachable instead of timing out on every frame
 
@@ -61,7 +66,7 @@ _TILE_CACHE_MAX = 36
 class SatelliteWindow:
     frames: Optional[np.ndarray]     # (1, 12, 1, 64, 64) in [0, 1], or None
     end_time: Optional[datetime]     # scan time of the last frame
-    status: str                      # ok | shifted | observed_only | missing
+    status: str                      # ok | shifted | gap_skipped | observed_only | missing
     shift_minutes: int = 0           # how far the window was moved back from the newest published frame
     reason: Optional[str] = None
     last_frame: Optional[np.ndarray] = None   # (64, 64): the frame at end_time, also when there is no 12-frame window
@@ -350,6 +355,22 @@ def floor_10min(dt: datetime) -> datetime:
     return dt.replace(minute=(dt.minute // 10) * 10, second=0, microsecond=0)
 
 
+def skip_one_gap(slots: list) -> Optional[tuple[list, int]]:
+    """12 real frames from 13 consecutive scan slots (oldest first) when exactly one scan is missing.
+
+    Returns (the 12 frames in time order, index of the missing slot), or None when the rule does not apply:
+    no scan or more than one is missing, or the missing one is the oldest slot or one of the newest
+    SKIP_GAP_NEWEST_KEPT. No frame is made up or repeated; the step across the gap is 20 minutes.
+    """
+    missing = [i for i, f in enumerate(slots) if f is None]
+    if len(slots) != SEQ_LEN + 1 or len(missing) != 1:
+        return None
+    gap = missing[0]
+    if gap == 0 or gap > SEQ_LEN - SKIP_GAP_NEWEST_KEPT:
+        return None
+    return [f for f in slots if f is not None], gap
+
+
 def load_satellite_window(
     station_id: str,
     lat: float,
@@ -360,7 +381,8 @@ def load_satellite_window(
     """Newest window of 12 consecutive real frames ending at or before `origin_utc`.
 
     Returns frames with shape (1, 12, 1, 64, 64) and the scan time of the last frame, or status
-    "missing" with the reason. Never fabricates or repeats frames.
+    "missing" with the reason. Never fabricates or repeats frames. When one older scan is missing
+    (status "gap_skipped") the 12 frames are real ones from 130 minutes, see skip_one_gap.
     """
     if minio_client is None:
         minio_client = connect_minio()
@@ -403,6 +425,19 @@ def load_satellite_window(
         newest = source.get(newest_published)
         if newest is not None:
             _cache_latest_rgb(station_id, lat, lon, newest_published, minio_client)
+            slots = [source.get(newest_published - FRAME_STEP * (SEQ_LEN - i)) for i in range(SEQ_LEN + 1)] if SKIP_ONE_GAP else []
+            skipped = skip_one_gap(slots)
+            if skipped is not None:
+                frames, gap = skipped
+                gap_time = newest_published - FRAME_STEP * (SEQ_LEN - gap)
+                seq = np.stack(frames, axis=0)[np.newaxis, :, np.newaxis, :, :].astype(np.float32)
+                logger.info(
+                    f"[Satellite Preprocessor] '{station_id}': 12 real frames ending {newest_published:%H:%M} UTC,"
+                    f" the missing scan of {gap_time:%H:%M} UTC left out"
+                )
+                return SatelliteWindow(
+                    seq, newest_published, "gap_skipped", 0, f"missing_scan_{gap_time:%H%M}_utc_left_out", last_frame=frames[-1]
+                )
             logger.info(f"[Satellite Preprocessor] '{station_id}': no 12-frame window, newest real frame {newest_published:%H:%M} UTC only")
             return SatelliteWindow(None, newest_published, "observed_only", 0, reason, last_frame=newest)
     logger.warning(f"[Satellite Preprocessor] '{station_id}': no usable satellite window ({reason})")

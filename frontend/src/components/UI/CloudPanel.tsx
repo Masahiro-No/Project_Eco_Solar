@@ -5,6 +5,7 @@ import { BadgeCheckIcon, CloudIcon, CloudOffIcon, CircleHelpIcon } from 'lucide-
 import { useTranslations } from 'next-intl';
 import { Panel } from './Panel';
 import { InfoTip } from './InfoTip';
+import { useForecastAge } from './ForecastFreshness';
 import { useForecast } from '@/context/ForecastContext';
 import { solarApi } from '@/services/api';
 import { CLOUD_UI, LOSS_HIGH_FROM_PCT, LOSS_MEDIUM_FROM_PCT, TONE_CLASS, impactLevelOfLoss } from '@/lib/levels';
@@ -18,10 +19,11 @@ const AOI_OFFSET_PCT = ((CROP_PX - AOI_PX) / 2 / CROP_PX) * 100;
 
 const CLOCK = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' });
 
-type StatusKey = 'sat_ok' | 'sat_shifted' | 'sat_observed_only' | 'sat_missing' | 'sat_night' | 'sat_low_sun' | 'sat_model_unavailable';
+type StatusKey = 'sat_ok' | 'sat_shifted' | 'sat_gap_skipped' | 'sat_observed_only' | 'sat_missing' | 'sat_night' | 'sat_low_sun' | 'sat_model_unavailable';
 const STATUS_KEY: Record<string, StatusKey> = {
   ok: 'sat_ok',
   shifted: 'sat_shifted',
+  gap_skipped: 'sat_gap_skipped',
   observed_only: 'sat_observed_only',
   missing: 'sat_missing',
   night: 'sat_night',
@@ -32,10 +34,13 @@ const STATUS_KEY: Record<string, StatusKey> = {
 /** Cloud in the area around the station: cover and expected loss of irradiance, now and for the next steps. */
 export function CloudPanel() {
   const t = useTranslations('common');
-  const { prediction, chartGhiData, selectedStationId } = useForecast();
+  const { prediction: newest, chartGhiData, selectedStationId } = useForecast();
+  const { stale } = useForecastAge();
   const [image, setImage] = useState<{ url: string; lastModified: string | null } | null>(null);
 
-  const predictedAt = prediction?.predicted_at;
+  const predictedAt = newest?.predicted_at;
+  // "cloud cover now" comes from the forecast round: an overdue round says nothing about now
+  const prediction = stale ? null : newest;
   useEffect(() => {
     if (!selectedStationId) return;
     let cancelled = false;
@@ -57,7 +62,7 @@ export function CloudPanel() {
   const nowPct = prediction?.cloud_coverage_now_pct ?? null;
   const level = prediction?.cloud_impact_level ?? null;
   const ui = level ? CLOUD_UI[level] : null;
-  const usable = ['ok', 'shifted', 'observed_only'].includes(prediction?.satellite_status ?? '');
+  const usable = ['ok', 'shifted', 'gap_skipped', 'observed_only'].includes(prediction?.satellite_status ?? '');
   const lossNow = prediction?.sat_ghi_loss_now_pct ?? null;
   const statusKey = prediction?.satellite_status ? STATUS_KEY[prediction.satellite_status] : undefined;
   const imageTime = image?.lastModified ? parseBackendDate(new Date(image.lastModified).toISOString()) : null;
@@ -92,7 +97,7 @@ export function CloudPanel() {
           </div>
 
           <p className="mt-2 text-[12.5px] leading-snug text-slate-700">
-            {statusKey ? t(statusKey, { minutes: prediction?.satellite_lag_minutes ?? 0 }) : t('no_forecast_title')}
+            {statusKey ? t(statusKey, { minutes: prediction?.satellite_lag_minutes ?? 0 }) : stale ? t('stale_note') : t('no_forecast_title')}
           </p>
           {usable && prediction?.sat_calibration_verified != null && (
             <p

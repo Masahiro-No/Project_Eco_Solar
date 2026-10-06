@@ -5,6 +5,7 @@ import { ZapIcon, TargetIcon, ScaleIcon, type LucideIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useForecast } from '@/context/ForecastContext';
 import { InfoTip } from './InfoTip';
+import { useForecastAge } from './ForecastFreshness';
 
 type Tile = {
   id: string;
@@ -18,7 +19,11 @@ type Tile = {
 /** Three numbers behind the decision. Icons are larger than the figures so the meaning reads first. */
 export function KpiRow() {
   const t = useTranslations('common');
-  const { prediction, selectedStation } = useForecast();
+  const { prediction: newest, selectedStation } = useForecast();
+  const { stale } = useForecastAge();
+  // an overdue forecast gives no figure for now: the tiles show a dash until the next round
+  const prediction = stale ? null : newest;
+  const none = stale ? t('stale_note') : t('no_data');
 
   const night = !!prediction?.is_night;
   const target = prediction?.target_power_kw ?? selectedStation?.target_capacity_kw ?? null;
@@ -33,7 +38,7 @@ export function KpiRow() {
       label: t('kpi_pgen'),
       help: t('help_pgen'),
       value: pgen,
-      note: night ? t('alert_night') : pct !== null ? `${pct}% ${t('pct_of_target')}` : t('no_data'),
+      note: night ? t('alert_night') : pct !== null ? `${pct}% ${t('pct_of_target')}` : none,
       icon: ZapIcon,
     },
     {
@@ -54,7 +59,7 @@ export function KpiRow() {
       label: t('kpi_dp'),
       help: t('help_dp'),
       value: prediction ? prediction.delta_p_kw : null,
-      note: !prediction ? t('no_data') : night ? t('alert_night') : prediction.delta_p_kw > 0 ? t('dp_short') : t('dp_met'),
+      note: !prediction ? none : night ? t('alert_night') : prediction.delta_p_kw > 0 ? t('dp_short') : t('dp_met'),
       icon: ScaleIcon,
     },
   ];

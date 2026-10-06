@@ -48,6 +48,7 @@ from api.ingestion.normalizer import WeatherDataNormalizer
 from api.ingestion.service import IngestionService, SATELLITE_BUCKET
 from api.stations.model import Station
 from api.storage.service import StorageService
+from service.workers.round_lock import clear_round_lock, run_one_at_a_time
 from core.config import settings
 from db.database import SessionLocal
 
@@ -94,7 +95,16 @@ duration_histogram = meter.create_histogram(
 # ── Core Worker Functions ───────────────────────────────────────────────────
 
 async def scheduled_ingest_pipeline(ctx: dict) -> dict[str, Any]:
-    """ARQ Cron Task — Runs every 10 minutes to ingest weather and satellite for ALL active stations."""
+    """ARQ Cron Task — every 10 minutes and once at worker start. A round that fires while another runs is skipped."""
+    ran, result = await run_one_at_a_time(ctx.get("redis"), lambda: _ingest_round(ctx))
+    if not ran:
+        logger.info("Ingestion round skipped: another round is still running.")
+        return {"skipped": "another_round_running"}
+    return result
+
+
+async def _ingest_round(ctx: dict) -> dict[str, Any]:
+    """Ingest weather and satellite for ALL active stations, then queue the forecast of each station."""
     start_time = time.time()
     job_id = ctx.get("job_id", f"cron-ingest-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
     logger.info(f"Starting scheduled ingestion pipeline (Job: {job_id})")
@@ -360,6 +370,7 @@ async def collect_inference_results(ctx: dict) -> dict[str, int]:
 
 
 async def startup(ctx: dict) -> None:
+    await clear_round_lock(ctx.get("redis"))
     logger.info("Ingestion Worker started up successfully. Listening on 'ingest_queue'.")
 
 

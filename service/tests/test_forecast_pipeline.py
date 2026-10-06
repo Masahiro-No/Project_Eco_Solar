@@ -316,3 +316,63 @@ def test_learning_curve_is_logged_one_point_per_epoch():
     assert not any(v != v for _, v, _ in fake.points)                               # a NaN is never logged
     assert log_history(fake, None) == 0
 
+
+def test_only_one_ingestion_round_runs_at_a_time():
+    import asyncio
+
+    from service.workers.round_lock import ROUND_LOCK_KEY, clear_round_lock, run_one_at_a_time
+
+    class Redis:
+        def __init__(self):
+            self.keys = {}
+
+        async def set(self, key, value, nx=False, ex=None):
+            if nx and key in self.keys:
+                return None
+            self.keys[key] = value
+            return True
+
+        async def delete(self, key):
+            self.keys.pop(key, None)
+
+    redis, seen = Redis(), []
+
+    async def other():
+        raise AssertionError("a second round ran next to the first")
+
+    async def first():
+        seen.append(dict(redis.keys))                                # the lock is held while the round runs
+        return await run_one_at_a_time(redis, other)                 # a scheduled round fires meanwhile
+
+    assert asyncio.run(run_one_at_a_time(redis, first)) == (True, (False, None))
+    assert seen == [{ROUND_LOCK_KEY: "1"}] and redis.keys == {}      # released afterwards
+
+    async def fails():
+        raise RuntimeError("round failed")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(run_one_at_a_time(redis, fails))
+    assert redis.keys == {}                                          # a failed round does not block the next one
+
+    redis.keys[ROUND_LOCK_KEY] = "1"                                 # left behind by a worker killed mid-round
+    asyncio.run(clear_round_lock(redis))
+    assert redis.keys == {}
+
+    async def plain():
+        return "done"
+
+    assert asyncio.run(run_one_at_a_time(None, plain)) == (True, "done")
+
+
+def test_one_missing_older_scan_is_left_out_and_nothing_is_made_up():
+    from service.workers.satellite_preprocessor import skip_one_gap
+
+    def slots(missing=()):
+        return [None if i in missing else np.full((2, 2), float(i), dtype=np.float32) for i in range(13)]
+
+    frames, gap = skip_one_gap(slots(missing=(4,)))
+    assert gap == 4 and [float(f[0, 0]) for f in frames] == [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12]   # 12 real frames, in order
+    assert skip_one_gap(slots(missing=(1,))) is not None and skip_one_gap(slots(missing=(9,))) is not None
+    for not_allowed in ((), (0,), (10,), (11,), (12,), (3, 7)):       # complete, oldest slot, one of the newest three, two gaps
+        assert skip_one_gap(slots(missing=not_allowed)) is None
+    assert skip_one_gap(slots()[:12]) is None                         # needs the 13 slots
