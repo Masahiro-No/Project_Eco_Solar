@@ -16,7 +16,7 @@ ONNX -> PyTorch weight loader for SolarLSTMForecaster.
 from __future__ import annotations
 
 import argparse
-from typing import Dict, List
+from typing import Dict
 
 import numpy as np
 import onnx

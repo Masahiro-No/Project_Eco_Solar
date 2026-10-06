@@ -1,4 +1,4 @@
-from typing import Optional, Sequence
+from typing import Sequence
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +8,6 @@ from api.stations.schema import (
     NearestStationResponse,
     StationCreateRequest,
     StationPatchRequest,
-    StationResponse,
     StationUpdateRequest,
 )
 

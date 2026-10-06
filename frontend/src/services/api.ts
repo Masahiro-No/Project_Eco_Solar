@@ -43,8 +43,6 @@ export interface StationCreateRequest extends StationBase {
   id?: string; // Optional custom ID (e.g. "ST-001")
 }
 
-export type StationUpdateRequest = StationBase;
-
 export interface StationPatchRequest {
   name?: string;
   latitude?: number;
@@ -64,9 +62,6 @@ export interface StationResponse extends StationBase {
   alert_level?: string;
   province?: string;
 }
-
-// Backward-compatibility alias
-export type StationDto = StationResponse;
 
 export interface NearestStationResponse {
   station_id: string;
@@ -178,44 +173,6 @@ export const solarApi = {
   },
 
   /**
-   * GET /api/stations/archived - Fetch all soft-deleted stations from Backend DB
-   */
-  async getArchivedStations(): Promise<StationResponse[]> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/stations/archived`, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.error('[solarApi.getArchivedStations] Backend error:', err);
-    }
-    return [];
-  },
-
-  /**
-   * GET /api/stations/{station_id} - Fetch single station by ID from Backend DB
-   */
-  async getStationById(stationId: string): Promise<StationResponse | null> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}`, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.error(`[solarApi.getStationById] Error fetching ${stationId}:`, err);
-    }
-    return null;
-  },
-
-  /**
    * POST /api/stations - Create a new solar station in Backend DB
    */
   async createStation(payload: StationCreateRequest): Promise<StationResponse | null> {
@@ -233,28 +190,6 @@ export const solarApi = {
       }
     } catch (err) {
       console.error('[solarApi.createStation] Error creating station:', err);
-    }
-    return null;
-  },
-
-  /**
-   * PUT /api/stations/{station_id} - Full update station spec in Backend DB
-   */
-  async updateStation(stationId: string, payload: StationUpdateRequest): Promise<StationResponse | null> {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/stations/${stationId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch (err) {
-      console.error(`[solarApi.updateStation] Error updating ${stationId}:`, err);
     }
     return null;
   },

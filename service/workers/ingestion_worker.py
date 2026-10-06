@@ -24,7 +24,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Ensure backend is in sys.path for local dev and docker containers
 BASE_DIR = Path(__file__).resolve().parent.parent.parent

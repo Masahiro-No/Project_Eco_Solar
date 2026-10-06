@@ -20,7 +20,6 @@ CLI (trainer container, /workspace):
 """
 
 import argparse
-import io
 import json
 import logging
 import os
